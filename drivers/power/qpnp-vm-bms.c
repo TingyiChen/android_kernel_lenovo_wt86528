@@ -289,9 +289,13 @@ static struct qpnp_bms_chip *the_chip;
 
 //+NewFeature,mahao.wt,ADD,2015.3.16,add Fan54015 driver
 #if defined (WT_USE_FAN54015)
+extern int Percentfull_times;
+extern bool FakeBatteryReport;
 extern bool  InSOCrecharge,BattFull,TrunOnChg;     
 extern int fan_54015_batt_current,fan_54015_batt_ocv;
+extern int BattTemp;
 extern int fan54015_getcharge_stat(void);
+extern struct work_struct chg_fast_work;  
 #endif
 //-NewFeature,mahao.wt,ADD,2015.3.16,add Fan54015 driver
 
@@ -1458,6 +1462,7 @@ static int report_eoc(struct qpnp_bms_chip *chip)
 		       //+NewFeature,mahao.wt,ADD,2015.3.16,add Fan54015 driver
                        #if defined (WT_USE_FAN54015)
                              InSOCrecharge = false;   
+				FakeBatteryReport=true;
 		            BattFull = true;
 			    printk(KERN_WARNING  "~ 1.BAT Full,TurnOff CHGR  \n"); 
                       #endif
@@ -1473,13 +1478,26 @@ static int report_eoc(struct qpnp_bms_chip *chip)
 		}
 	 //+NewFeature,mahao.wt,ADD,2015.3.16,add Fan54015 driver
            #if defined (WT_USE_FAN54015)
-               else if((ret.intval == POWER_SUPPLY_STATUS_FULL)&&(fan_54015_batt_current<0&&fan_54015_batt_current>-100000&&fan_54015_batt_ocv>4350000))
-               	{
-                      InSOCrecharge = false;   
-		      BattFull = true;
-		      printk(KERN_WARNING  "~ 2.BAT Full,TurnOff CHGR  \n");           
-                     TrunOnChg = false;
+               else if(0<BattTemp&&BattTemp<450) // ret.intval == POWER_SUPPLY_STATUS_FULL
+               	{ if(fan_54015_batt_current<0&&fan_54015_batt_current>-150000&&fan_54015_batt_ocv>4340000)
+                    {  InSOCrecharge = false;   
+               FakeBatteryReport=true;
+		       BattFull = true;
+		       printk(KERN_WARNING  "~ 2.BAT Full,TurnOff CHGR  \n");           
+                      TrunOnChg = false;
+		      chip->eoc_reported = true;
+               	    }
                	}
+	      else if(450<BattTemp&&BattTemp<500)	
+	         	 {   if(fan_54015_batt_current<0&&fan_54015_batt_current>-200000&&fan_54015_batt_ocv>4320000)
+                                {    InSOCrecharge = false;  
+							 FakeBatteryReport=true; 
+		                     BattFull = true;
+		                     printk(KERN_WARNING  "~ 3.BAT Full,TurnOff CHGR  \n");           
+                                     TrunOnChg = false;
+		                     chip->eoc_reported = true;
+               	                 }
+	         	 }
           #endif
          //-NewFeature,mahao.wt,ADD,2015.3.16,add Fan54015 driver
 		
@@ -1495,9 +1513,12 @@ static void check_recharge_condition(struct qpnp_bms_chip *chip)
 	int rc;
 	union power_supply_propval ret = {0,};    
 	int status = get_battery_status(chip);
-
-	// printk(KERN_WARNING  "~ Recharge_check: status=%d chip->last_soc=%d chip->eoc_reported=%d  \n",status,chip->last_soc,chip->eoc_reported);  //add by maxwill
-
+	#if defined WT_USE_FAN54015
+		printk(KERN_WARNING  "~ Recharge_check: status=%d chip->last_soc=%d chip->eoc_reported=%d  \n",status,chip->last_soc,chip->eoc_reported);  //add by maxwill
+	#else
+		// printk(KERN_WARNING  "~ Recharge_check: status=%d chip->last_soc=%d chip->eoc_reported=%d  \n",status,chip->last_soc,chip->eoc_reported);  //add by maxwill
+	#endif
+	
 	if (chip->last_soc > chip->dt.cfg_soc_resume_limit)
 		return;
 
@@ -1512,6 +1533,10 @@ static void check_recharge_condition(struct qpnp_bms_chip *chip)
                 #if defined (WT_USE_FAN54015)
                       InSOCrecharge = true;      
 		     BattFull= false;
+		     TrunOnChg = true;
+		     //add schedule work chg_fast_wrok here  wangfufqiang
+		    printk(KERN_WARNING  "~check_recharge_condition chg_fast_work  \n");
+                  schedule_work(&chg_fast_work);    
                #endif
              //-NewFeature,mahao.wt,ADD,2015.3.16,add Fan54015 driver
 		
@@ -1524,6 +1549,9 @@ static void check_recharge_condition(struct qpnp_bms_chip *chip)
 			pr_info("soc dropped below resume_soc soc=%d resume_soc=%d, restart charging\n",
 					chip->last_soc,
 					chip->dt.cfg_soc_resume_limit);
+			#if defined WT_USE_FAN54015
+					    if(get_battery_status(chip)==POWER_SUPPLY_STATUS_CHARGING) //BUG,mahao.wt,ADD,2015.7.21,Do Not clear eoc_reported if fan54015 not in charging status     
+			#endif
 			chip->eoc_reported = false;
 		}
 	}
@@ -1671,7 +1699,17 @@ static int report_vm_bms_soc(struct qpnp_bms_chip *chip)
 
 
      //+NewFeature,mahao.wt,ADD,2015.3.16,add Fan54015 driver
-         #if defined (WT_USE_FAN54015)		
+         #if defined (WT_USE_FAN54015)	
+	   if (FakeBatteryReport){
+		  Percentfull_times=20;
+	   }else
+	   {
+		  Percentfull_times--;
+		  if(Percentfull_times<10){
+			Percentfull_times=10;
+		  }
+		  
+	   }
            rc = fan54015_getcharge_stat();
 	   if(rc==0x1)
 	   	charging = true;
@@ -1773,16 +1811,33 @@ static int report_vm_bms_soc(struct qpnp_bms_chip *chip)
     //+NewFeature,mahao.wt,ADD,2015.3.16,add Fan54015 driver
         #if defined (WT_USE_FAN54015)
               if(soc==100&&charging)        
-              	{  if(fan_54015_batt_current<0&&fan_54015_batt_current>-100000&&fan_54015_batt_ocv>4350000)
-                       soc = 100;
-	           else if(fan_54015_batt_current<-100000)     
-			     {
-                                 soc -= 1;   
+              	{  
+                    if(0<BattTemp&&BattTemp<450) 
+	               	{ if(fan_54015_batt_current<0&&fan_54015_batt_current>-150000&&fan_54015_batt_ocv>4340000)
+	                     soc = 100;
+			    else if((fan_54015_batt_current<-150000)||(fan_54015_batt_ocv<4340000))     
+			                soc -= 1;	           	      
+	               	}
+		    else if(450<BattTemp&&BattTemp<500)	
+		         	 {   if(fan_54015_batt_current<0&&fan_54015_batt_current>-200000&&fan_54015_batt_ocv>4320000)
+	                                 soc = 100;
+			              else if((fan_54015_batt_current<-200000)||(fan_54015_batt_ocv<4320000))     
+			                 soc -= 1;	         
+		         	 }		   
 
-	           	     }
               	}
+		if (soc <97)
+		{
+			FakeBatteryReport=false;
+		}
         #endif
-	 //printk(KERN_WARNING  "~ soc=%d chip->last_soc=%d chip->dt.cfg_soc_resume_limit=%d \n ",soc,chip->last_soc,chip->dt.cfg_soc_resume_limit);	
+	//Porting FAN54O15,IsaacChen,ADD,2017.1.19
+	#if defined WT_USE_FAN54015
+		printk(KERN_WARNING  "~ soc=%d chip->last_soc=%d charging=%d\n ",soc,chip->last_soc,charging);	
+	#else
+		//printk(KERN_WARNING  "~ soc=%d chip->last_soc=%d chip->dt.cfg_soc_resume_limit=%d \n ",soc,chip->last_soc,chip->dt.cfg_soc_resume_limit);	
+	#endif
+	//Porting FAN54015,IsaacChen,ADD,2017.1.19
    //-NewFeature,mahao.wt,ADD,2015.3.16,add Fan54015 driver
 	
 	if ((soc != chip->last_soc) || (soc == 100)) {    
@@ -2564,7 +2619,11 @@ static void qpnp_vm_bms_ext_power_changed(struct power_supply *psy)
 
 	pr_debug("Triggered!\n");
 	battery_status_check(chip);
-	battery_insertion_check(chip);
+	#if defined WT_USE_FAN54015
+		//battery_insertion_check(chip);//BUG,Hopper.wt,DEL,2015.7.16,To resolve SOC jump in DropDown test
+	#else
+		battery_insertion_check(chip);
+	#endif
 
 	if (chip->reported_soc_in_use)
 		reported_soc_check_status(chip);
@@ -2958,7 +3017,7 @@ static int calculate_initial_soc(struct qpnp_bms_chip *chip)
 
      //+BUG,mahao.wt,ADD,2015.5.28,compensate init_Vbat_ocv when boot with charger on 
 	#if defined (WT_USE_FAN54015)
-	   u16  Vbat_ocv=0;  
+	   u32  Vbat_ocv=0;  
        #endif
      //-BUG,mahao.wt,ADD,2015.5.28,compensate init_Vbat_ocv when boot with charger on 	   
 
@@ -3007,8 +3066,20 @@ static int calculate_initial_soc(struct qpnp_bms_chip *chip)
 	        if (rc) 
 		       pr_err("~Read Vbat_ocv Failed! rc = %d\n", rc); 	
 		else
-			pr_info("~ Vbat_ocv = %d\n", Vbat_ocv); 	
-                chip->last_ocv_uv = Vbat_ocv*1000;
+			pr_info("\n~Vbat_ocv = %d\n", Vbat_ocv); 	
+
+		Vbat_ocv*=1000;
+		
+                 if(!chip->shutdown_soc_invalid)
+                  {
+                      if(chip->shutdown_ocv>Vbat_ocv)
+                           Vbat_ocv=Vbat_ocv+(chip->shutdown_ocv-Vbat_ocv)/2;
+		      else
+			   Vbat_ocv=chip->shutdown_ocv+(Vbat_ocv-chip->shutdown_ocv)/2;         
+                  }
+                pr_info("\n~Vbat_ocv_adjusted = %d\n", Vbat_ocv); 	
+		
+                chip->last_ocv_uv = Vbat_ocv;
    		
                   chip->calculated_soc = lookup_soc_ocv(chip,chip->last_ocv_uv, batt_temp);
 			
@@ -3048,7 +3119,19 @@ static int calculate_initial_soc(struct qpnp_bms_chip *chip)
 		       pr_err("~Read Vbat_ocv Failed! rc = %d\n", rc); 	
 		else
 			pr_info("\n~ Vbat_ocv = %d\n", Vbat_ocv); 	
-                chip->last_ocv_uv = Vbat_ocv*1000;
+
+		Vbat_ocv*=1000;			
+				 
+		 if(!chip->shutdown_soc_invalid)
+                  {
+                      if(chip->shutdown_ocv>Vbat_ocv)
+                           Vbat_ocv=Vbat_ocv+(chip->shutdown_ocv-Vbat_ocv)/2;
+		      else
+			   Vbat_ocv=chip->shutdown_ocv+(Vbat_ocv-chip->shutdown_ocv)/2;     
+                  }
+                pr_info("\n~Vbat_ocv_adjusted = %d\n", Vbat_ocv); 			
+		
+                chip->last_ocv_uv = Vbat_ocv;
 	     #endif			
         //-BUG,mahao.wt,ADD,2015.5.28,compensate init_Vbat_ocv when boot with charger on         
 

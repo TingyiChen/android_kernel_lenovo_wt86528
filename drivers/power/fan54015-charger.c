@@ -290,13 +290,15 @@ struct fan54015_otg_regulator {
 }fan54015_otg_regulator;
 
 struct work_struct chg_update_work;
-//struct delayed_work chg_update_work;
+struct delayed_work chg_plugin_work;
 struct work_struct chg_fast_work;
 
 static BYTE fan54015_curr_reg[17];
 static struct i2c_client *this_client;
 static int reset_flag = 0;      // use when assert reset
-bool IsUsbPlugIn=false, IsTAPlugIn=false,IsChargingOn=false,TrunOnChg=false,ResetFan54015=false,ChgrCFGchanged=false,OTGturnOn=false,VbusValid=false,BattPresent=false,InSOCrecharge=false,BattFull=false,RemoveBTC=false;     //IsColdToNormal,IsHotToNormal   
+bool IsUsbPlugIn=false, IsTAPlugIn=false,IsChargingOn=false,TrunOnChg=false,ResetFan54015=false,ChgrCFGchanged=false,OTGturnOn=false,VbusValid=false,InSOCrecharge=false,BattFull=false,RemoveBTC=false;     //IsColdToNormal,IsHotToNormal   
+bool LowChgCurrent=false;
+bool FakeBatteryReport=false;
 struct wake_lock Fan54015WatchDogKicker,Fan54015OTGLocker;
 uint   BattSOC=0,BattVol=0;
 int BattTemp=0;
@@ -410,7 +412,8 @@ static void fan54015_update_work_func(struct work_struct *work)
   wake_lock(&Fan54015WatchDogKicker); 
  //pm_stay_awake(&this_client->dev);
 
-   mdelay(500);  //delay   500ms
+  ResetFan54015 = false; 
+   // msleep(500);  //delay   500ms        
 
    SetLBCchgrCTRLreg();
    GetLBCchgrCTRLreg();
@@ -423,10 +426,24 @@ static void fan54015_update_work_func(struct work_struct *work)
     
    //1. kick watchDog every 10s .
    #ifdef FAN54015_DEBUG_FS
-    printk(KERN_WARNING  "~fan54015KickWDT, IsUsbPlugIn=%d, IsTAPlugIn=%d,IsChargingOn=%d  batt_current=%d batt_ocv=%d TrunOnChg=%d BattSOC=%d,BattTemp=%d,BattVol=%d,Fan54015Voreg=%d,Fan54015Iochg=%d OTGturnOn=%d InSOCrecharge=%d BattFull=%d \n",
-                                             IsUsbPlugIn,IsTAPlugIn,IsChargingOn,fan_54015_batt_current,fan_54015_batt_ocv,TrunOnChg,BattSOC,BattTemp,BattVol,Fan54015Voreg,Fan54015Iochg,OTGturnOn,InSOCrecharge,BattFull);        
-    #endif
+    printk(KERN_WARNING  "~fan54015KickWDT, IsUsbPlugIn=%d, IsTAPlugIn=%d,IsChargingOn=%d  batt_current=%d batt_ocv=%d TrunOnChg=%d BattSOC=%d,BattTemp=%d,BattVol=%d,Fan54015Voreg=%d,Fan54015Iochg=%d OTGturnOn=%d InSOCrecharge=%d BattFull=%d FakeBatteryReport=%d \n",
+                                             IsUsbPlugIn,IsTAPlugIn,IsChargingOn,fan_54015_batt_current,fan_54015_batt_ocv,TrunOnChg,BattSOC,BattTemp,BattVol,Fan54015Voreg,Fan54015Iochg,OTGturnOn,InSOCrecharge,BattFull,FakeBatteryReport);        
+    #endif   
+
+     if(OTGturnOn)
+    	{
+    		fan54015_set_value(FAN54015_REG_CONTROL0, FAN54015_TMR_RST_OTG,FAN54015_TMR_RST_OTG_SHIFT, RESET32S);  
+            printk(KERN_WARNING  "~Start Alarm1\n");     
+            kt = ns_to_ktime(T32S_RESET_INTERVAL); 
+            alarm_start_relative(&FanWDTkicker, kt);              
+            wake_unlock(&Fan54015WatchDogKicker);	
+	    	return ;		
+    	}
+	
     fan54015_set_value(FAN54015_REG_CONTROL0, FAN54015_TMR_RST_OTG,FAN54015_TMR_RST_OTG_SHIFT, RESET32S);  
+
+	
+#if 0	   // do not turnoff system when Batt not exist
 
     BattPresent = IsBattPresent();
     
@@ -436,6 +453,7 @@ static void fan54015_update_work_func(struct work_struct *work)
 
    if(!BattPresent)    
    	pm_power_off();
+#endif   
       
     // 2. TurnOn/Off charger according to charger type
     if(IsUsbPlugIn==true&&IsChargingOn==false&&TrunOnChg==true)     
@@ -460,7 +478,7 @@ static void fan54015_update_work_func(struct work_struct *work)
 			    fan54015_stopcharging();
 			 
 			}
-		     else if((TrunOnChg==false&&(IsChargingOn==true))||(BattPresent==0))            
+		     else if(TrunOnChg==false&&(IsChargingOn==true))            
 		     	          {  IsChargingOn=false;
 			             
 			             fan54015_stopcharging();       
@@ -487,18 +505,14 @@ static void fan54015_update_work_func(struct work_struct *work)
     for ( i = 0; i<8; i++) {
         fan54015_regs[i] = fan54015_read_reg(regaddrs[i]);
     }
-    printk(KERN_WARNING  "~FAN54015_regs:");
-
-   for ( i = 0; i<8; i++) {
-		 printk(KERN_WARNING  "  [%d]=0x%x  ",regaddrs[i] ,fan54015_regs[i]); //regaddrs[i] ,   fan54015_regs[i]
-	  }
-  printk(KERN_WARNING  "\n");
+     printk(KERN_WARNING  " [0]=0x%x  [1]=0x%x  [2]=0x%x  [3]=0x%x  [4]=0x%x  [5]=0x%x  [6]=0x%x  [16]=0x%x\n ",fan54015_regs[0],fan54015_regs[1],fan54015_regs[2],fan54015_regs[3],fan54015_regs[4],fan54015_regs[5],
+	 	                                            fan54015_regs[6],fan54015_regs[7]); //regaddrs[i] ,   fan54015_regs[i]
 
  #endif
 
    
 
-   if(IsChargingOn==true)
+   if((IsChargingOn==true)||(true ==InSOCrecharge ))
        {
           printk(KERN_WARNING  "~Start Alarm   \n");     
          kt = ns_to_ktime(T32S_RESET_INTERVAL); 
@@ -556,7 +570,7 @@ static void fan54015_init(void)
    #endif   
         memcpy(fan54015_curr_reg,fan54015_def_reg,sizeof(fan54015_curr_reg));
       INIT_WORK(&chg_update_work, fan54015_update_work_func);
-     // INIT_DELAYED_WORK(&chg_update_work, fan54015_update_work_func);
+      INIT_DELAYED_WORK(&chg_plugin_work, fan54015_update_work_func);
 	INIT_WORK(&chg_fast_work, fan54015_update_work_func);
 		
 #ifdef FAN54015_DEBUG_FS
@@ -604,7 +618,7 @@ void fan54015_TA_startcharging(void)
     else  if(Fan54015Voreg==4330)     
     	       {
                    #ifdef FAN54015_DEBUG_FS	
-                     printk(KERN_WARNING  "~set Voreg to 4100mv  \n");	
+                     printk(KERN_WARNING  "~set Voreg to 4330mv  \n");	
                    #endif    
                  fan54015_set_value(FAN54015_REG_OREG, FAN54015_OREG,FAN54015_OREG_SHIFT, VOREG4P34);  //OREG = 4.34V
 
@@ -621,11 +635,18 @@ void fan54015_TA_startcharging(void)
       if(Fan54015Iochg==1150)
           {
               #ifdef FAN54015_DEBUG_FS	
-                printk(KERN_WARNING  "~set Iochg to 1150mA  \n");	
+                printk(KERN_WARNING  "~set Iochg to 1150mA\n");	     
               #endif    
-
-	       fan54015_set_value(FAN54015_REG_IBAT, FAN54015_IOCHARGE,FAN54015_IOCHARGE_SHIFT, IOCHARGE1150);  //1150mA
-
+               if(LowChgCurrent)
+               	{
+                   #ifdef FAN54015_DEBUG_FS	
+                              printk(KERN_WARNING  "~FallBack to 850mA\n");	    
+                   #endif 
+		   fan54015_set_value(FAN54015_REG_IBAT, FAN54015_IOCHARGE,FAN54015_IOCHARGE_SHIFT, IOCHARGE850);  //850mA		   
+               	}
+	      else{		   
+	                 fan54015_set_value(FAN54015_REG_IBAT, FAN54015_IOCHARGE,FAN54015_IOCHARGE_SHIFT, IOCHARGE1150);  //1150mA
+	      	      }
     	  }
     else  if(Fan54015Iochg==850)
     	       {
@@ -640,7 +661,7 @@ void fan54015_TA_startcharging(void)
                    #ifdef FAN54015_DEBUG_FS	
                      printk(KERN_WARNING  "~set Iochg to 460mA  \n");	
                    #endif    
-                  fan54015_set_value(FAN54015_REG_IBAT, FAN54015_IOCHARGE,FAN54015_IOCHARGE_SHIFT, IOCHARGE550);  //550mA
+                  fan54015_set_value(FAN54015_REG_IBAT, FAN54015_IOCHARGE,FAN54015_IOCHARGE_SHIFT, IOCHARGE650);  //650mA
 
     	       }
 	     else 
@@ -780,6 +801,7 @@ int fan54015_otg_regulator_enable(struct regulator_dev * rdev)
   #endif
     
    OTGturnOn = true;
+   schedule_work(&chg_fast_work);// heming@wt, for OTG remove issue, start work to kickdog
 
 #if  1
    rc = pinctrl_select_state(fan_pinctrl, fan_otgPin_high);

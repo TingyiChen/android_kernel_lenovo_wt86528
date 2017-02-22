@@ -195,6 +195,9 @@ static enum power_supply_property msm_batt_power_props[] = {
 	POWER_SUPPLY_PROP_CHARGE_TYPE,
 	POWER_SUPPLY_PROP_HEALTH,
 	POWER_SUPPLY_PROP_PRESENT,
+	#if defined WT_USE_FAN54015
+	POWER_SUPPLY_PROP_TECHNOLOGY,
+	#endif
 	POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN,
 	POWER_SUPPLY_PROP_VOLTAGE_MIN_DESIGN,
 	POWER_SUPPLY_PROP_VOLTAGE_NOW,
@@ -642,15 +645,19 @@ static int qpnp_lbc_is_usb_chg_plugged_in(struct qpnp_lbc_chip *chip)
 
 //+NewFeature,mahao.wt,ADD,2015.3.16,add Fan54015 driver
 #if defined (WT_USE_FAN54015)    
+#define PLUGIN_DELAY		msecs_to_jiffies(500)
+int Percentfull_times=10;
 extern void fan54015_USB_startcharging(void);
-extern void  fan54015_TA_startcharging(void); 
-extern void  fan54015_stopcharging(void);
+extern void fan54015_TA_startcharging(void); 
+extern void fan54015_stopcharging(void);
 extern int fan54015_getcharge_stat(void);
-extern  bool IsUsbPlugIn,IsTAPlugIn,TrunOnChg,IsChargingOn,ResetFan54015,ChgrCFGchanged,VbusValid,OTGturnOn,InSOCrecharge,BattFull,RemoveBTC;
-extern  int Fan54015Voreg,Fan54015Iochg,fan_54015_batt_current,fan_54015_batt_ocv;
+extern bool IsUsbPlugIn,IsTAPlugIn,TrunOnChg,IsChargingOn,ResetFan54015,ChgrCFGchanged,VbusValid,OTGturnOn,InSOCrecharge,BattFull,RemoveBTC, LowChgCurrent;
+extern bool FakeBatteryReport;
+extern int Fan54015Voreg,fan_54015_batt_current,Fan54015Iochg,fan_54015_batt_ocv;
 extern uint   BattSOC,BattVol;
 extern int BattTemp;
 extern struct work_struct chg_fast_work;  
+extern struct delayed_work chg_plugin_work;
 extern struct power_supply  * pFan_batt_psy;
 int IsBattPresent(void);
 struct qpnp_lbc_chip *pmic8916_chip;
@@ -684,6 +691,8 @@ static int qpnp_lbc_charger_enable(struct qpnp_lbc_chip *chip, int reason,
              }
           else  if(reg_val==CHG_ENABLE)		  
                         {   TrunOnChg = true;
+		  		ChgrCFGchanged = true;
+		           printk(KERN_WARNING  "~qpnp_lbc_charger_enable chg_fast_work  \n");
                             schedule_work(&chg_fast_work);    
  
 		        }
@@ -1252,10 +1261,16 @@ static int get_prop_batt_present(struct qpnp_lbc_chip *chip)
 	return (reg_val & BATT_PRES_MASK) ? 1 : 0;
 }
 
+static int get_prop_batt_temp(struct qpnp_lbc_chip *chip);
 static int get_prop_batt_health(struct qpnp_lbc_chip *chip)
 {
 	u8 reg_val;
 	int rc;
+	 //+NewFeature,mahao.wt,ADD,2015.7.2,for stop charging warning  popup
+           #if defined (WT_USE_FAN54015)
+              int batt_temp = 0;
+          #endif
+      //-NewFeature,mahao.wt,ADD,2015.7.2,for stop charging warning  popup
 
 	rc = qpnp_lbc_read(chip, chip->bat_if_base + BAT_IF_TEMP_STATUS_REG,
 				&reg_val, 1);
@@ -1263,6 +1278,27 @@ static int get_prop_batt_health(struct qpnp_lbc_chip *chip)
 		pr_err("Failed to read battery health rc=%d\n", rc);
 		return POWER_SUPPLY_HEALTH_UNKNOWN;
 	}
+
+        //+NewFeature,mahao.wt,ADD,2015.7.2,for stop charging warning  popup
+           #if defined (WT_USE_FAN54015)
+	        //if(IsChargingOn) 
+	        {
+        	       batt_temp = get_prop_batt_temp(chip);
+		     
+	               if(batt_temp>500)     
+	                  {  
+                              pr_info("\n~Batt_Heal_HOT\n");   
+			      return POWER_SUPPLY_HEALTH_OVERHEAT;       
+	              	  }
+			else if(batt_temp<0)	
+				   {
+                                      pr_info("\n~Batt_Heal_COLD\n");    
+				       return POWER_SUPPLY_HEALTH_COLD;
+				   }
+		}
+          #endif
+      //-NewFeature,mahao.wt,ADD,2015.7.2,for stop charging warning  popup
+
 
 	if (BATT_TEMP_HOT_MASK & reg_val)
 		return POWER_SUPPLY_HEALTH_OVERHEAT;
@@ -1346,6 +1382,11 @@ static int get_prop_batt_status(struct qpnp_lbc_chip *chip)
        
 	//+NewFeature,mahao.wt,ADD,2015.3.16,add Fan54015 driver
         #if defined (WT_USE_FAN54015)
+             if(FakeBatteryReport)
+              {
+                 return POWER_SUPPLY_STATUS_FULL;
+              }
+		
             chg_status = fan54015_getcharge_stat();       
 	  
 	    if(chg_status<0)
@@ -1477,6 +1518,14 @@ static int get_prop_capacity(struct qpnp_lbc_chip *chip)
 
               //+NewFeature,mahao.wt,ADD,2015.3.16,add Fan54015 driver
                #if defined (WT_USE_FAN54015) 
+		if(FakeBatteryReport){
+	   		printk(KERN_WARNING  "~FakeBatteryReport 100 \n");
+              	soc=100;
+       	}
+		if(Percentfull_times>10){
+			 printk(KERN_WARNING  "~after full fake 100 \n");
+              	soc=100;
+       	}
                 BattSOC = soc;
                #endif
              //-NewFeature,mahao.wt,ADD,2015.3.16,add Fan54015 driver
@@ -1788,7 +1837,11 @@ static int qpnp_batt_power_set_property(struct power_supply *psy,
 			switch (val->intval) {
 			case POWER_SUPPLY_STATUS_CHARGING:
 				chip->chg_done = false;
+				#if defined WT_USE_FAN54015
+				pr_debug("~resuming charging by bms\n");//wangfuqiang note this log should exist;
+				#else
 				pr_debug("resuming charging by bms\n");
+				#endif
 				if (!chip->cfg_disable_vbatdet_based_recharge)
 					qpnp_lbc_vbatdet_override(chip,
 								OVERRIDE_0);
@@ -1822,6 +1875,7 @@ static int qpnp_batt_power_set_property(struct power_supply *psy,
                  #if defined (WT_USE_FAN54015)    
                       if(val->intval)
                            { TrunOnChg = true;
+					  printk(KERN_WARNING  "~POWER_SUPPLY_PROP_CHARGING_ENABLED chg_fast_work  \n");
                               schedule_work(&chg_fast_work);              
                       	  }
 		      else
@@ -1892,6 +1946,11 @@ static int qpnp_batt_power_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_PRESENT:
 		val->intval = get_prop_batt_present(chip);
 		break;
+	#if defined WT_USE_FAN54015
+	case POWER_SUPPLY_PROP_TECHNOLOGY:
+		val->intval = POWER_SUPPLY_TECHNOLOGY_LION;
+		break;
+	#endif
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN:
 		val->intval = chip->cfg_max_voltage_mv * 1000;
 		break;
@@ -2084,7 +2143,11 @@ static void qpnp_lbc_jeita_adc_notification(enum qpnp_tm_state state, void *ctx)
 
 	temp = get_prop_batt_temp(chip);
 
+	#if defined WT_USE_FAN54015
+	pr_info("\n~temp = %d state = %s\n", temp,
+	#else
 	pr_debug("temp = %d state = %s\n", temp,
+	#endif
 			state == ADC_TM_WARM_STATE ? "warm" : "cool");
 
 	if (state == ADC_TM_WARM_STATE) {
@@ -2626,7 +2689,9 @@ static irqreturn_t qpnp_lbc_usbin_valid_irq_handler(int irq, void *_chip)
 	unsigned long flags;
 	ktime_t kt;  //bug, wanggongzhen.wt,add code , 2014-10-9 , alarm should remove when charger removed.
 	u8 usbin_path_sts=0,rc=0;    //New features, libin.wt,add code , 2015-04-21 ,charger over-voltage pop-up prompts.  
-
+       InSOCrecharge=false;
+	FakeBatteryReport=false;
+	   
 	usb_present = qpnp_lbc_is_usb_chg_plugged_in(chip);
 	pr_debug("usbin-valid triggered: %d\n", usb_present);
 	
@@ -2701,7 +2766,7 @@ static irqreturn_t qpnp_lbc_usbin_valid_irq_handler(int irq, void *_chip)
 				  IsUsbPlugIn = true;
 				  InSOCrecharge = false ;
 				  BattFull = false;
-				  schedule_work(&chg_fast_work);
+				  schedule_delayed_work(&chg_plugin_work, PLUGIN_DELAY);
 			     }
 		       #endif
 	               //-NewFeature,mahao.wt,MODIFY,2015.3.16,add Fan54015 driver 
@@ -3115,17 +3180,52 @@ exit:
 }
 
 //+bug, wanggongzhen.wt,add code , 2014-10-9 , alarm should remove when charger removed.
+#if defined WT_USE_FAN54015
+static int disable_software_temp_monitor = 0xFF;   //0: Normal Mode    1: TurnOff BTC Mode   2: Charge Current Control Mode       
+#else
 static int disable_software_temp_monitor = 0;
+#endif
 int dis_sof_temp_monitor_set(const char *val, const struct kernel_param *kp)
 {
+    //+NewFeature,mahao.wt,ADD,2015.6.20,for charge current control to decrease temperature
+    #if defined (WT_USE_FAN54015)
+     int retCode=0;   
+     long temp=0;	
+           if(!val)
+              {  pr_info("~TempSwitch setValue Error!\n");
+                 return 0 ;
+              }
+           else{
+                      retCode=strict_strtol(val,0,&temp);      
+                      if(retCode)
+			 pr_info("~ConvertTempSwitch Error!%d\n",retCode);	
+		      else{
+                                disable_software_temp_monitor=(int)temp;    
+				pr_info("\n~Set TempSwitch to %d\n",disable_software_temp_monitor);
+		      	      }
+
+		     return retCode;		  
+           	  }		
+   #else    
+   //-NewFeature,mahao.wt,ADD,2015.6.20,for charge current control to decrease temperature
 	if (!val) val = "1";
 	return strtobool(val, kp->arg);
+   #endif 	 //NewFeature,mahao.wt,ADD,2015.6.20,for charge current control to decrease temperature
 }
 
 int dis_sof_temp_monitor_get(char *buffer, const struct kernel_param *kp)
 {
+  //+NewFeature,mahao.wt,ADD,2015.6.20,for charge current control to decrease temperature
+    #if defined (WT_USE_FAN54015)
+	  int ret=0;
+          ret= sprintf(buffer, "%d", disable_software_temp_monitor);
+	  disable_software_temp_monitor = 1;
+	  return ret;	  
+   #else	
+  //-NewFeature,mahao.wt,ADD,2015.6.20,for charge current control to decrease temperature 
 	disable_software_temp_monitor = 1;
 	return sprintf(buffer, "%c", *(bool *)kp->arg ? 'Y' : 'N');
+   #endif	//NewFeature,mahao.wt,ADD,2015.6.20,for charge current control to decrease temperature
 }
 
 static struct kernel_param_ops dis_sof_temp_monitor_ops = {
@@ -3156,7 +3256,14 @@ static void qpnp_lbc_batt_temp_alarm_work_fn(struct work_struct *work)
 	   
 	   
 	struct qpnp_lbc_chip *chip = container_of(work, struct qpnp_lbc_chip,batt_temp_work);
-	if((!qpnp_lbc_is_usb_chg_plugged_in(chip))||(chip->chg_done))
+
+	if(!qpnp_lbc_is_usb_chg_plugged_in(chip)){
+		
+		FakeBatteryReport=false;
+	}
+	
+	/*if((!qpnp_lbc_is_usb_chg_plugged_in(chip))||(chip->chg_done)) bug wangfuqiang.wt 20150806 in chg_done,overtemp, can not resume to charge */
+	if(!qpnp_lbc_is_usb_chg_plugged_in(chip))
 	{
 		enabled_delay_times = DELAY_COUNT;
 		disabled_delay_times = DELAY_COUNT;
@@ -3167,7 +3274,7 @@ static void qpnp_lbc_batt_temp_alarm_work_fn(struct work_struct *work)
 		goto exit;
 	}
 
-	if(disable_software_temp_monitor)
+	if(disable_software_temp_monitor==1)   //NewFeature,mahao.wt,MOD,2015.6.20,for charge current control to decrease temperature
 	{
 		qpnp_lbc_charger_enable(chip , WT_THERMAL , 1);
 		enabled_delay_times = DELAY_COUNT;
@@ -3186,15 +3293,35 @@ static void qpnp_lbc_batt_temp_alarm_work_fn(struct work_struct *work)
                //-NewFeature,mahao.wt,ADD,2015.4.26,for burn-in test	
 		goto out;
 	}
+//+NewFeature,mahao.wt,ADD,2015.6.20,for charge current control to decrease temperature
+      #if defined (WT_USE_FAN54015)
+       else if(disable_software_temp_monitor==2){
+                             LowChgCurrent=true;
+		            ChgrCFGchanged=true;			
+                            pr_info("\n~Set CHgrCurr to 850ma in CCCM\n");
+                            					
+       	             }
+      #endif	   
+//-NewFeature,mahao.wt,ADD,2015.6.20,for charge current control to decrease temperature
+	
 	//+NewFeature,mahao.wt,ADD,2015.4.26,for burn-in test
 	#if defined (WT_USE_FAN54015)
-        else{   RemoveBTC = false; 
+        else if(disable_software_temp_monitor==0)
+		{   RemoveBTC = false; 
                     rc = qpnp_lbc_masked_write(chip,
 			chip->bat_if_base + BAT_IF_BTC_CTRL,           
 			BTC_COMP_EN_MASK, 0x80);
 	           if (rc)
-		       pr_err("Failed to  TurnOn BTC, rc=%d\n", rc);		
-        	}
+		       pr_err("Failed to  TurnOn BTC, rc=%d\n", rc);	         		   
+
+	            //+NewFeature,mahao.wt,ADD,2015.6.20,for charge current control to decrease temperature			 
+                      LowChgCurrent=false;
+		     ChgrCFGchanged=true;			
+                     pr_info("\n~Set CHgrCurr to 1150ma in CCCM\n");
+		     disable_software_temp_monitor=0xFF;			 
+		   //-NewFeature,mahao.wt,ADD,2015.6.20,for charge current control to decrease temperature			
+				
+              }
 	#endif	
 	//-NewFeature,mahao.wt,ADD,2015.4.26,for burn-in test
 
@@ -3217,7 +3344,7 @@ static void qpnp_lbc_batt_temp_alarm_work_fn(struct work_struct *work)
 	}
 	else 
 	{
-		if((!chg_enabled)&&(10 <= batt_temp)&&(batt_temp <= 480))
+		if((!chg_enabled)&&(10 <= batt_temp)&&(batt_temp <= 490))
 		{
 			if(enabled_delay_times++ == DELAY_COUNT)
 			{
@@ -3226,7 +3353,9 @@ static void qpnp_lbc_batt_temp_alarm_work_fn(struct work_struct *work)
 				disabled_delay_times = 0;
 				chg_disabled = 0;
 				chg_enabled = 1;
-
+				#if defined (WT_USE_FAN54015)
+                           ChgrCFGchanged = true;//bug wangfuqiang.wt 20150806 in chg_done,overtemp, can not resume to charge
+				#endif
 				qpnp_lbc_charger_enable(chip , WT_THERMAL , 1);
 				if(batt_temp < 350 && batt_temp > 150)
 				{
