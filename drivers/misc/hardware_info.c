@@ -29,8 +29,7 @@ static long hardwareinfo_ioctl(struct file *file, unsigned int cmd,unsigned long
 	void __user *data = (void __user *)arg;
 
 	//char info[HARDWARE_MAX_ITEM_LONGTH];
-	
-	switch (cmd) { 
+	switch (cmd) {
 	case HARDWARE_LCD_GET:
 		hardwareinfo_set_prop(HARDWARE_LCD, Lcm_name);//req  wuzhenzhen.wt 20140901 add for hardware info
 		hardwareinfo_num = HARDWARE_LCD;
@@ -54,7 +53,7 @@ static long hardwareinfo_ioctl(struct file *file, unsigned int cmd,unsigned long
 	case HARDWARE_WIFI_GET:
 		hardwareinfo_set_prop(HARDWARE_WIFI, "Qualcomm-msm8916");
 		hardwareinfo_num = HARDWARE_WIFI;
-		break;	
+		break;
 	case HARDWARE_ACCELEROMETER_GET:
 		hardwareinfo_num = HARDWARE_ACCELEROMETER;
 		break;
@@ -66,21 +65,24 @@ static long hardwareinfo_ioctl(struct file *file, unsigned int cmd,unsigned long
 		break;
 	case HARDWARE_MAGNETOMETER_GET:
 		hardwareinfo_num = HARDWARE_MAGNETOMETER;
-		break;		
+		break;
 	case HARDWARE_GPS_GET:
 		hardwareinfo_set_prop(HARDWARE_GPS, "Qualcomm-msm8916");
-	    hardwareinfo_num = HARDWARE_GPS;
+	        hardwareinfo_num = HARDWARE_GPS;
 		break;
 	case HARDWARE_FM_GET:
 		hardwareinfo_set_prop(HARDWARE_FM, "Qualcomm-msm8916");
-	    hardwareinfo_num = HARDWARE_FM;		
+	        hardwareinfo_num = HARDWARE_FM;
 		break;
 	case HARDWARE_BACK_CAM_MOUDULE_ID_GET:
 		hardwareinfo_num = HARDWARE_BACK_CAM_MOUDULE_ID;
 		break;
+	case HARDWARE_FRONT_CAM_MODULE_ID_GET:
+		hardwareinfo_num = HARDWARE_FRONT_CAM_MOUDULE_ID;
+		break;
 	case HARDWARE_BATTERY_ID_GET:
 		hardwareinfo_num = HARDWARE_BATTERY_ID;
-		break;		
+		break;
 	default:
 		ret = -EINVAL;
 		goto err_out;

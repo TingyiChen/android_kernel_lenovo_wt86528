@@ -19,8 +19,13 @@
 #include "msm_eeprom.h"
 #include <linux/hardware_info.h>
 
+//#define MSM_EEPROM_DEBUG
 #undef CDBG
+#ifdef MSM_EEPROM_DEBUG
+#define CDBG(fmt, args...) pr_err(fmt, ##args)
+#else
 #define CDBG(fmt, args...) pr_debug(fmt, ##args)
+#endif
 
 DEFINE_MSM_MUTEX(msm_eeprom_mutex);
 #ifdef CONFIG_COMPAT
@@ -654,7 +659,7 @@ static int msm_eeprom_spi_setup(struct spi_device *spi)
 
 	rc = of_property_read_u32(spi->dev.of_node, "cell-index",
 				  &e_ctrl->subdev_id);
-	CDBG("cell-index %d, rc %d\n", e_ctrl->subdev_id, rc);
+	CDBG("e_ctrl->subdev_id cell-index %d, rc %d\n", e_ctrl->subdev_id, rc);
 	if (rc < 0) {
 		pr_err("failed rc %d\n", rc);
 		return rc;
@@ -932,6 +937,8 @@ static int msm_eeprom_platform_probe(struct platform_device *pdev)
 	struct msm_eeprom_board_info *eb_info = NULL;
 	struct device_node *of_node = pdev->dev.of_node;
 	struct msm_camera_power_ctrl_t *power_info = NULL;
+	static char eeprom_module_id[20] = {0};
+	int index = 0;
 
 	CDBG("%s E\n", __func__);
 
@@ -957,6 +964,7 @@ static int msm_eeprom_platform_probe(struct platform_device *pdev)
 		return rc;
 	}
 	e_ctrl->subdev_id = pdev->id;
+	pr_err("qhq %s e_ctrl->subdev_id= %d, pdev->id %d\n", __func__,e_ctrl->subdev_id, pdev->id);
 
 	rc = of_property_read_u32(of_node, "qcom,cci-master",
 		&e_ctrl->cci_master);
@@ -1051,18 +1059,57 @@ static int msm_eeprom_platform_probe(struct platform_device *pdev)
 	for (j = 0; j < e_ctrl->cal_data.num_data; j++)
 		CDBG("memory_data[%d] = 0x%X\n", j,
 			e_ctrl->cal_data.mapdata[j]);
-	if (eb_info->i2c_slaveaddr == 0x20) {
-		if (e_ctrl->cal_data.mapdata[1] == 0x7) {
-			hardwareinfo_set_prop(HARDWARE_BACK_CAM_MOUDULE_ID,"oufeiguang");
+
+	e_ctrl->is_supported |= msm_eeprom_match_crc(&e_ctrl->cal_data);
+
+	if (e_ctrl->subdev_id == 4) {//8865
+		CDBG("qhq %s,line=%d\n",__func__,__LINE__);
+		if ((e_ctrl->cal_data.mapdata[0] & 0xC0) == 0x40) {
+			index = 1;	
+		} else if ((e_ctrl->cal_data.mapdata[0] & 0x30) == 0x10) {
+			index = 6;	
+		} else if ((e_ctrl->cal_data.mapdata[0] & 0x0C) == 0x04) {
+			index = 11;	
+		} else {
+			index = 0;
 		}
-		else if (e_ctrl->cal_data.mapdata[1] == 0x6) {
-			hardwareinfo_set_prop(HARDWARE_BACK_CAM_MOUDULE_ID,"qiutaiwei");	
+		if (index && e_ctrl->cal_data.mapdata[index]) {
+			
+			CDBG("qhq ov8865 %s,line=%d eeprom_module_id1=%d eeprom_module_id2=%d \n",__func__,__LINE__
+				,(index && e_ctrl->cal_data.mapdata[index]), e_ctrl->cal_data.mapdata[index]);
+			sprintf(eeprom_module_id, "%x", e_ctrl->cal_data.mapdata[index]);
+			hardwareinfo_set_prop(HARDWARE_BACK_CAM_MOUDULE_ID, "oufeiguang");
+			CDBG("No OTP!\n");
+			hardwareinfo_set_prop(HARDWARE_FRONT_CAM_MOUDULE_ID, "NO OTP");
+		}
+	} else if (e_ctrl->subdev_id == 5) {//5670
+		if ((e_ctrl->cal_data.mapdata[0]&0xC0) == 0x40) {
+			index = 1;
+		} else if ((e_ctrl->cal_data.mapdata[0]&0x30) == 0x10) {
+			index = 17;
+		} else if ((e_ctrl->cal_data.mapdata[0]&0x0C) == 0x04) {
+			index = 33;
+		} else {
+			index = 0;
+		}
+		if (index && e_ctrl->cal_data.mapdata[index]) {
+			CDBG("qhq ov5670 %s,line=%d eeprom_module_id1=%d eeprom_module_id2=%d \n",__func__,__LINE__
+				,(index && e_ctrl->cal_data.mapdata[index]), e_ctrl->cal_data.mapdata[index]);
+			sprintf(eeprom_module_id, "%x", e_ctrl->cal_data.mapdata[index]);
+			hardwareinfo_set_prop(HARDWARE_FRONT_CAM_MOUDULE_ID, "oufeiguang");
+		}
+	} else if (e_ctrl->subdev_id == 6) {//13850, only group1
+			index = 1;
+		if (index && e_ctrl->cal_data.mapdata[index]) {
+			CDBG("qhq ov13850 %s,line=%d eeprom_module_id1=%d eeprom_module_id2=%d \n",__func__,__LINE__
+				,(index && e_ctrl->cal_data.mapdata[index]), e_ctrl->cal_data.mapdata[index]);
+			sprintf(eeprom_module_id, "%x", e_ctrl->cal_data.mapdata[index]);
+			hardwareinfo_set_prop(HARDWARE_BACK_CAM_MOUDULE_ID, "oufeiguang");
 		}
 	}
-	else {
-		CDBG("%s hardwareinfo_set_prop error :%d\n", __func__, __LINE__);
-	}	
-	e_ctrl->is_supported |= msm_eeprom_match_crc(&e_ctrl->cal_data);
+	
+	CDBG("qhq e_ctrl->subdev_id = %d, eeprom_module_id = %s, flag = %x, index = %d\n"
+		, e_ctrl->subdev_id, eeprom_module_id, e_ctrl->cal_data.mapdata[index], index);
 
 	rc = msm_camera_power_down(power_info, e_ctrl->eeprom_device_type,
 		&e_ctrl->i2c_client);

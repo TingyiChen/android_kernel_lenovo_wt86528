@@ -543,11 +543,11 @@ int msm_sensor_match_id(struct msm_sensor_ctrl_t *s_ctrl)
 		pr_err("msm_sensor_match_id chip id doesnot match\n");
 		return -ENODEV;
 	} else {
-		if((slave_info->sensor_id == 0x5670)||(slave_info->sensor_id == 0x2355)) {
-			hardwareinfo_set_prop(HARDWARE_FRONT_CAM,sensor_name);
+		if ((slave_info->sensor_id == 0x5670) || (slave_info->sensor_id == 0x2355)) {
+			hardwareinfo_set_prop(HARDWARE_FRONT_CAM, sensor_name);
 		}
-		 if ((slave_info->sensor_id == 0x219)||(slave_info->sensor_id == 0x8865)) {
-			hardwareinfo_set_prop(HARDWARE_BACK_CAM,sensor_name);
+		if ((slave_info->sensor_id == 0xd850) || (slave_info->sensor_id == 0x8865)) {
+			hardwareinfo_set_prop(HARDWARE_BACK_CAM, sensor_name);
 		}
 	}
 	return rc;
