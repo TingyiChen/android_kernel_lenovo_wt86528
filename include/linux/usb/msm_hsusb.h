@@ -104,7 +104,11 @@ enum msm_usb_phy_type {
 	SNPS_FEMTO_PHY,
 };
 
+#ifdef CONFIG_MACH_WT86528
+#define IDEV_CHG_MAX	1150
+#else
 #define IDEV_CHG_MAX	1500
+#endif
 #define IDEV_CHG_MIN	500
 #define IUNIT		100
 
