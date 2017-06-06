@@ -851,7 +851,8 @@ static ssize_t environ_read(struct file *file, char __user *buf,
 	int ret = 0;
 	struct mm_struct *mm = file->private_data;
 
-	if (!mm)
+	/* Ensure the process spawned far enough to have an environment. */
+	if (!mm || !mm->env_end)
 		return 0;
 
 	page = (char *)__get_free_page(GFP_TEMPORARY);
@@ -2718,6 +2719,9 @@ static const struct pid_entry tgid_base_stuff[] = {
 	REG("mounts",     S_IRUGO, proc_mounts_operations),
 	REG("mountinfo",  S_IRUGO, proc_mountinfo_operations),
 	REG("mountstats", S_IRUSR, proc_mountstats_operations),
+#ifdef CONFIG_PROCESS_RECLAIM
+	REG("reclaim", S_IWUSR, proc_reclaim_operations),
+#endif
 #ifdef CONFIG_PROC_PAGE_MONITOR
 	REG("clear_refs", S_IWUSR, proc_clear_refs_operations),
 	REG("smaps",      S_IRUGO, proc_pid_smaps_operations),

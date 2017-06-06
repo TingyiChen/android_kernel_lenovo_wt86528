@@ -498,6 +498,13 @@ static int pil_init_mmap(struct pil_desc *desc, const struct pil_mdt *mdt)
 	return pil_init_entry_addr(priv, mdt);
 }
 
+struct pil_map_fw_info {
+	void *region;
+	struct dma_attrs attrs;
+	phys_addr_t base_addr;
+	struct device *dev;
+};
+
 static void pil_release_mmap(struct pil_desc *desc)
 {
 	struct pil_priv *priv = desc->priv;
@@ -516,14 +523,30 @@ static void pil_release_mmap(struct pil_desc *desc)
 	}
 }
 
-#define IOMAP_SIZE SZ_1M
+static void pil_clear_segment(struct pil_desc *desc)
+{
+	struct pil_priv *priv = desc->priv;
+	u8 __iomem *buf;
 
-struct pil_map_fw_info {
-	void *region;
-	struct dma_attrs attrs;
-	phys_addr_t base_addr;
-	struct device *dev;
-};
+	struct pil_map_fw_info map_fw_info = {
+		.attrs = desc->attrs,
+		.region = priv->region,
+		.base_addr = priv->region_start,
+		.dev = desc->dev,
+	};
+
+	void *map_data = desc->map_data ? desc->map_data : &map_fw_info;
+
+	/* Clear memory so that unauthorized ELF code is not left behind */
+	buf = desc->map_fw_mem(priv->region_start, (priv->region_end -
+					priv->region_start), map_data);
+	pil_memset_io(buf, 0, (priv->region_end - priv->region_start));
+	desc->unmap_fw_mem(buf, (priv->region_end - priv->region_start),
+								map_data);
+
+}
+
+#define IOMAP_SIZE SZ_1M
 
 static void *map_fw_mem(phys_addr_t paddr, size_t size, void *data)
 {
@@ -749,6 +772,7 @@ out:
 					&desc->attrs);
 			priv->region = NULL;
 		}
+		pil_clear_segment(desc);
 		pil_release_mmap(desc);
 	}
 	return ret;
@@ -774,6 +798,16 @@ void pil_shutdown(struct pil_desc *desc)
 		pil_proxy_unvote(desc, 1);
 	else
 		flush_delayed_work(&priv->proxy);
+}
+EXPORT_SYMBOL(pil_shutdown);
+
+/**
+ * pil_free_memory() - Free memory resources associated with a peripheral
+ * @desc: descriptor from pil_desc_init()
+ */
+void pil_free_memory(struct pil_desc *desc)
+{
+	struct pil_priv *priv = desc->priv;
 
 	if (priv->region) {
 		dma_free_attrs(desc->dev, priv->region_size,
@@ -781,7 +815,7 @@ void pil_shutdown(struct pil_desc *desc)
 		priv->region = NULL;
 	}
 }
-EXPORT_SYMBOL(pil_shutdown);
+EXPORT_SYMBOL(pil_free_memory);
 
 static DEFINE_IDA(pil_ida);
 

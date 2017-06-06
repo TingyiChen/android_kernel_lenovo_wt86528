@@ -31,6 +31,14 @@
 	status = "disabled";
 };
 
+&ts_reset_active {
+	output-high;
+};
+
+&ts_reset_suspend {
+	output-low;
+};
+
 &spi_5 {
 	status = "okay";
 	bu21150-ts-spi@0 {
@@ -53,6 +61,7 @@
 		jdi,panel-model = "ql1500";
 		jdi,pitch-type = "np";
 		jdi,afe-vendor = "rohm";
+		jdi,timeout-enable;
 	};
 };
 

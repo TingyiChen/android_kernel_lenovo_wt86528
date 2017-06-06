@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -19,6 +19,7 @@
 &pm8909_bms {
 	status = "ok";
 	qcom,battery-data = <&mtp_batterydata>;
+	qcom,batt-aging-comp;
 };
 
 &spmi_bus {
@@ -103,6 +104,22 @@
 
 &audio_codec_mtp {
 	qcom,msm-micbias2-ext-cap;
+};
+
+&spk_vreg {
+	status = "okay";
+};
+
+&pm8909_conga_dig {
+	cdc-vdd-spkdrv-supply = <&spk_vreg>;
+	qcom,cdc-vdd-spkdrv-voltage = <5000000 5000000>;
+	qcom,cdc-vdd-spkdrv-current = <20000>;
+	qcom,cdc-on-demand-supplies = "cdc-vdd-mic-bias",
+				      "cdc-vdd-spkdrv";
+};
+
+&wcnss {
+	qcom,wcnss-vadc = <&pm8909_vadc>;
 };
 
 &smb1357_otg_vreg {

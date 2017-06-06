@@ -52,7 +52,9 @@
 #define PPP_OP_FLIP_LR			BIT(10)
 #define PPP_OP_FLIP_UD			BIT(11)
 #define PPP_OP_BLEND_ON			BIT(12)
-#define PPP_OP_BLEND_CONSTANT_ALPHA BIT(14)
+#define PPP_OP_BLEND_CONSTANT_ALPHA	BIT(14)
+#define PPP_OP_BLEND_BG_ALPHA		BIT(13)
+#define PPP_OP_BLEND_EQ_REVERSE		BIT(15)
 #define PPP_OP_DITHER_EN		BIT(16)
 #define PPP_BLEND_CALPHA_TRNASP BIT(24)
 
@@ -300,6 +302,8 @@ struct ppp_resource {
 	u64 next_ab;
 	u64 next_ib;
 	u64 clk_rate;
+	u64 solid_fill_pixel;
+	u64 solid_fill_byte;
 };
 
 struct ppp_csc_table {

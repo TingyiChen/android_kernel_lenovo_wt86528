@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -51,7 +51,7 @@
 			linux,reserve-contiguous-region;
 			linux,reserve-region;
 			linux,remove-completely;
-			reg = <0x0 0x86800000 0x0 0x05500000>;
+			reg = <0x0 0x86800000 0x0 0x05600000>;
 			label = "modem_adsp_mem";
 		};
 
@@ -59,7 +59,7 @@
 			linux,reserve-contiguous-region;
 			linux,reserve-region;
 			linux,remove-completely;
-			reg = <0x0 0x8bd00000 0x0 0x0600000>;
+			reg = <0x0 0x8be00000 0x0 0x0600000>;
 			label = "peripheral_mem";
 		};
 
@@ -469,7 +469,7 @@
 		interrupts = <0 145 0 0 146 0>;
 		interrupt-names = "wcnss_wlantx_irq", "wcnss_wlanrx_irq";
 
-		qcom,pronto-vddmx-supply = <&pm8916_l3>;
+		qcom,pronto-vddmx-supply = <&pm8916_l3_corner_ao>;
 		qcom,pronto-vddcx-supply = <&pm8916_s2_corner>;
 		qcom,pronto-vddpx-supply = <&pm8916_l7>;
 		qcom,iris-vddxo-supply   = <&pm8916_l7>;
@@ -488,8 +488,10 @@
 		clocks = <&clock_rpm clk_xo_wlan_clk>,
 			 <&clock_rpm clk_rf_clk2>,
 			 <&clock_debug clk_gcc_debug_mux>,
-			 <&clock_gcc clk_wcnss_m_clk>;
-		clock-names = "xo", "rf_clk", "measure", "wcnss_debug";
+			 <&clock_gcc clk_wcnss_m_clk>,
+			 <&clock_gcc clk_gcc_snoc_qosgen_clk>;
+		clock-names = "xo", "rf_clk", "measure", "wcnss_debug",
+				"snoc_qosgen";
 
 		qcom,has-autodetect-xo;
 		qcom,is-pronto-vt;
@@ -688,6 +690,8 @@
                 qcom,use-sw-aes-xts-algo;
                 qcom,use-sw-aes-ccm-algo;
                 qcom,use-sw-ahash-algo;
+		qcom,use-sw-hmac-algo;
+		qcom,use-sw-aead-algo;
 		status = "disabled";
 		qcom,ce-opp-freq = <100000000>;
 	};
@@ -858,16 +862,23 @@
 		clock-names = "core_clk", "iface_clk";
 	};
 
+	dma_blsp1: qcom,sps-dma@7884000 { /* BLSP1 */
+		#dma-cells = <4>;
+		compatible = "qcom,sps-dma";
+		reg = <0x7884000 0x23000>;
+		interrupts = <0 238 0>;
+		qcom,summing-threshold = <10>;
+	};
+
 	i2c_6: i2c@78ba000 { /* BLSP1 QUP6 */
 		compatible = "qcom,i2c-msm-v2";
 		#address-cells=<1>;
 		#size-cells=<0>;
 		cell-index = <6>;
-		reg-names = "qup_phys_addr", "bam_phys_addr";
-		reg = <0x78ba000 0x1000>,
-		      <0x7884000 0x23000>;
-		interrupt-names = "qup_irq", "bam_irq";
-		interrupts = <0 100 0>, <0 238 0>;
+		reg-names = "qup_phys_addr";
+		reg = <0x78ba000 0x1000>;
+		interrupt-names = "qup_irq";
+		interrupts = <0 100 0>;
 		clocks = <&clock_gcc clk_gcc_blsp1_ahb_clk>,
 			 <&clock_gcc clk_gcc_blsp1_qup6_i2c_apps_clk>;
 		clock-names = "iface_clk", "core_clk";
@@ -878,8 +889,9 @@
 		pinctrl-1 = <&i2c_6_sleep>;
 		qcom,noise-rjct-scl = <0>;
 		qcom,noise-rjct-sda = <0>;
-		qcom,bam-pipe-idx-cons = <14>;
-		qcom,bam-pipe-idx-prod = <15>;
+		dmas = <&dma_blsp1 14 64 0x20000020 0x20>,
+			<&dma_blsp1 15 32 0x20000020 0x20>;
+		dma-names = "tx", "rx";
 		qcom,master-id = <86>;
 	};
 
@@ -887,11 +899,10 @@
 		compatible = "qcom,i2c-msm-v2";
 		#address-cells = <1>;
 		#size-cells = <0>;
-		reg-names = "qup_phys_addr", "bam_phys_addr";
-		reg = <0x78b6000 0x600>,
-		      <0x7884000 0x23000>;
-		interrupt-names = "qup_irq", "bam_irq";
-		interrupts = <0 96 0>, <0 238 0>;
+		reg-names = "qup_phys_addr";
+		reg = <0x78b6000 0x600>;
+		interrupt-names = "qup_irq";
+		interrupts = <0 96 0>;
 		clocks = <&clock_gcc clk_gcc_blsp1_ahb_clk>,
 			 <&clock_gcc clk_gcc_blsp1_qup2_i2c_apps_clk>;
 		clock-names = "iface_clk", "core_clk";
@@ -902,8 +913,9 @@
 		pinctrl-1 = <&i2c_0_sleep>;
 		qcom,noise-rjct-scl = <0>;
 		qcom,noise-rjct-sda = <0>;
-		qcom,bam-pipe-idx-cons = <6>;
-		qcom,bam-pipe-idx-prod = <7>;
+		dmas = <&dma_blsp1 6 64 0x20000020 0x20>,
+			<&dma_blsp1 7 32 0x20000020 0x20>;
+		dma-names = "tx", "rx";
 		qcom,master-id = <86>;
 	};
 
@@ -936,11 +948,10 @@
 		compatible = "qcom,i2c-msm-v2";
 		#address-cells = <1>;
 		#size-cells = <0>;
-		reg-names = "qup_phys_addr", "bam_phys_addr";
-		reg = <0x78b8000 0x1000>,
-		      <0x7884000 0x23000>;
-		interrupt-names = "qup_irq", "bam_irq";
-		interrupts = <0 98 0>, <0 238 0>;
+		reg-names = "qup_phys_addr";
+		reg = <0x78b8000 0x1000>;
+		interrupt-names = "qup_irq";
+		interrupts = <0 98 0>;
 		qcom,clk-freq-out = <100000>;
 		qcom,clk-freq-in  = <19200000>;
 		clock-names = "iface_clk", "core_clk";
@@ -952,8 +963,9 @@
 		pinctrl-1 = <&i2c_4_sleep>;
 		qcom,noise-rjct-scl = <0>;
 		qcom,noise-rjct-sda = <0>;
-		qcom,bam-pipe-idx-cons = <10>;
-		qcom,bam-pipe-idx-prod = <11>;
+		dmas = <&dma_blsp1 10 64 0x20000020 0x20>,
+			<&dma_blsp1 11 32 0x20000020 0x20>;
+		dma-names = "tx", "rx";
 		qcom,master-id = <86>;
 	};
 
@@ -961,11 +973,10 @@
 		compatible = "qcom,i2c-msm-v2";
 		#address-cells = <1>;
 		#size-cells = <0>;
-		reg-names = "qup_phys_addr", "bam_phys_addr";
-		reg = <0x78b9000 0x600>,
-		      <0x7884000 0x23000>;
-		interrupt-names = "qup_irq", "bam_irq";
-		interrupts = <0 99 0>, <0 238 0>;
+		reg-names = "qup_phys_addr";
+		reg = <0x78b9000 0x600>;
+		interrupt-names = "qup_irq";
+		interrupts = <0 99 0>;
 		qcom,clk-freq-out = <100000>;
 		qcom,clk-freq-in  = <19200000>;
 		clock-names = "iface_clk", "core_clk";
@@ -977,8 +988,9 @@
 		pinctrl-1 = <&i2c_5_sleep>;
 		qcom,noise-rjct-scl = <0>;
 		qcom,noise-rjct-sda = <0>;
-		qcom,bam-pipe-idx-cons = <12>;
-		qcom,bam-pipe-idx-prod = <13>;
+		dmas = <&dma_blsp1 12 64 0x20000020 0x20>,
+			<&dma_blsp1 13 32 0x20000020 0x20>;
+		dma-names = "tx", "rx";
 		qcom,master-id = <86>;
 	};
 
@@ -1057,7 +1069,15 @@
 		interrupt-names = "hc_irq", "pwr_irq";
 
 		qcom,bus-width = <8>;
-		qcom,cpu-dma-latency-us = <701>;
+
+		qcom,qos-planes = <3>;
+		qcom,cpu-dma-latency-us = <2 401 701>;
+		qcom,cpu-dma-latency-us-r = <2 401 701>;
+		qcom,cpu-dma-latency-us-w = <2 401 701>;
+		qcom,cpu-affinity-r = "affine_cores";
+		qcom,cpu-affinity-mask-r = <0xf0>;
+		qcom,modified-dynamic-qos;
+
 		qcom,msm-bus,name = "sdhc1";
 		qcom,msm-bus,num-cases = <8>;
 		qcom,msm-bus,num-paths = <1>;
@@ -1110,7 +1130,7 @@
 			 <&clock_gcc clk_gcc_sdcc2_apps_clk>;
 		clock-names = "iface_clk", "core_clk";
 
-		qcom,clk-rates = <400000 25000000 50000000 100000000 177770000>;
+		qcom,clk-rates = <400000 25000000 50000000 100000000 200000000>;
 
 		status = "disabled";
 	};
@@ -1203,7 +1223,7 @@
 		qcom,scm_core_clk_src = <80000000>;
 
 		qcom,pas-id = <9>;
-		qcom,proxy-timeout-ms = <5000>;
+		qcom,proxy-timeout-ms = <100>;
 		qcom,firmware-name = "venus";
 		linux,contiguous-region = <&venus_mem>;
 	};
@@ -1399,6 +1419,11 @@
 		bt_sco_tx: qcom,msm-dai-q6-bt-sco-tx {
 			compatible = "qcom,msm-dai-q6-dev";
 			qcom,msm-dai-q6-dev-id = <12289>;
+		};
+
+		bt_a2dp_rx: qcom,msm-dai-q6-bt-a2dp-rx {
+			compatible = "qcom,msm-dai-q6-dev";
+			qcom,msm-dai-q6-dev-id = <12290>;
 		};
 
 		int_fm_rx: qcom,msm-dai-q6-int-fm-rx {
@@ -1858,4 +1883,3 @@
 	};
 };
 
-#include "msm8939-gpu.dtsi"

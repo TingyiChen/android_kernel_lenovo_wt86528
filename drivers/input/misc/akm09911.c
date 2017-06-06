@@ -116,9 +116,6 @@ struct akm_compass_data {
 	int	last_y;
 	int	last_z;
 
-	/* dummy value to avoid sensor event get eaten */
-	int	rep_cnt;
-
 	struct regulator	*vdd;
 	struct regulator	*vio;
 	struct akm_sensor_state state;
@@ -1767,7 +1764,7 @@ static int akm_compass_parse_dt(struct device *dev,
 }
 #endif /* !CONFIG_OF */
 
-#ifndef WT_USE_FAN54015
+#ifndef CONFIG_MACH_WT86528
 static int akm_pinctrl_init(struct akm_compass_data *akm)
 {
 	struct i2c_client *client = akm->i2c;
@@ -1800,6 +1797,7 @@ static int akm_report_data(struct akm_compass_data *akm)
 	int ret;
 	int mag_x, mag_y, mag_z;
 	int tmp;
+	ktime_t timestamp;
 
 	ret = AKECS_GetData_Poll(akm, dat_buf, AKM_SENSOR_DATA_SIZE);
 	if (ret) {
@@ -1812,6 +1810,8 @@ static int akm_report_data(struct akm_compass_data *akm)
 		AKECS_Reset(akm, 0);
 		return -EIO;
 	}
+
+	timestamp = ktime_get_boottime();
 
 	tmp = (int)((int16_t)(dat_buf[2]<<8)+((int16_t)dat_buf[1]));
 	tmp = tmp * akm->sense_conf[0] / 128 + tmp;
@@ -1877,11 +1877,12 @@ static int akm_report_data(struct akm_compass_data *akm)
 	input_report_abs(akm->input, ABS_X, mag_x);
 	input_report_abs(akm->input, ABS_Y, mag_y);
 	input_report_abs(akm->input, ABS_Z, mag_z);
-
-	/* avoid eaten by input subsystem framework */
-	if ((mag_x == akm->last_x) && (mag_y == akm->last_y) &&
-			(mag_z == akm->last_z))
-		input_report_abs(akm->input, ABS_MISC, akm->rep_cnt++);
+	input_event(akm->input,
+		EV_SYN, SYN_TIME_SEC,
+		ktime_to_timespec(timestamp).tv_sec);
+	input_event(akm->input,
+		EV_SYN, SYN_TIME_NSEC,
+		ktime_to_timespec(timestamp).tv_nsec);
 
 	akm->last_x = mag_x;
 	akm->last_y = mag_y;
@@ -2283,7 +2284,7 @@ int akm_compass_probe(struct i2c_client *client, const struct i2c_device_id *id)
 
 	s_akm->delay[MAG_DATA_FLAG] = sensors_cdev.delay_msec * 1000000;
 
-	err = sensors_classdev_register(&client->dev, &s_akm->cdev);
+	err = sensors_classdev_register(&s_akm->input->dev, &s_akm->cdev);
 
 	if (err) {
 		dev_err(&client->dev, "class device create failed: %d\n", err);

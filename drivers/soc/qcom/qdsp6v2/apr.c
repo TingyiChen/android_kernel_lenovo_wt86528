@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2014, 2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -34,6 +34,7 @@
 #include <linux/qdsp6v2/apr.h>
 #include <linux/qdsp6v2/apr_tal.h>
 #include <linux/qdsp6v2/dsp_debug.h>
+#include <linux/ratelimit.h>
 
 #define SCM_Q6_NMI_CMD 0x1
 
@@ -268,19 +269,22 @@ int apr_send_pkt(void *handle, uint32_t *buf)
 	uint16_t client_id;
 	uint16_t w_len;
 	unsigned long flags;
+	static DEFINE_RATELIMIT_STATE(rl, HZ/2, 1);
 
 	if (!handle || !buf) {
 		pr_err("APR: Wrong parameters\n");
 		return -EINVAL;
 	}
 	if (svc->need_reset) {
-		pr_err("apr: send_pkt service need reset\n");
+		if (__ratelimit(&rl))
+			pr_err("apr: send_pkt service need reset\n");
 		return -ENETRESET;
 	}
 
 	if ((svc->dest_id == APR_DEST_QDSP6) &&
 	    (apr_get_q6_state() != APR_SUBSYS_LOADED)) {
-		pr_err("%s: Still dsp is not Up\n", __func__);
+		if (__ratelimit(&rl))
+			pr_err("%s: Still dsp is not Up\n", __func__);
 		return -ENETRESET;
 	} else if ((svc->dest_id == APR_DEST_MODEM) &&
 		   (apr_get_modem_state() == APR_SUBSYS_DOWN)) {
@@ -325,6 +329,7 @@ struct apr_svc *apr_register(char *dest, char *svc_name, apr_fn svc_fn,
 	int temp_port = 0;
 	struct apr_svc *svc = NULL;
 	int rc = 0;
+	static DEFINE_RATELIMIT_STATE(rl, HZ/2, 1);
 
 	if (!dest || !svc_name || !svc_fn)
 		return NULL;
@@ -345,7 +350,8 @@ struct apr_svc *apr_register(char *dest, char *svc_name, apr_fn svc_fn,
 
 	if (dest_id == APR_DEST_QDSP6) {
 		if (apr_get_q6_state() != APR_SUBSYS_LOADED) {
-			pr_err("%s: adsp not up\n", __func__);
+			if (__ratelimit(&rl))
+				pr_err("%s: adsp not up\n", __func__);
 			return NULL;
 		}
 		pr_debug("%s: adsp Up\n", __func__);
@@ -392,7 +398,6 @@ struct apr_svc *apr_register(char *dest, char *svc_name, apr_fn svc_fn,
 		pr_err("APR: Service needs reset\n");
 		goto done;
 	}
-	svc->priv = priv;
 	svc->id = svc_id;
 	svc->dest_id = dest_id;
 	svc->client_id = client_id;
@@ -417,6 +422,7 @@ struct apr_svc *apr_register(char *dest, char *svc_name, apr_fn svc_fn,
 			svc->fn = svc_fn;
 			if (svc->port_cnt)
 				svc->svc_cnt++;
+			svc->priv = priv;
 		}
 	}
 
@@ -451,7 +457,7 @@ void apr_cb_func(void *buf, int len, void *priv)
 	pr_debug("\n*****************\n");
 
 	if (!buf || len <= APR_HDR_SIZE) {
-		pr_err("APR: Improper apr pkt received:%p %d\n", buf, len);
+		pr_err("APR: Improper apr pkt received:%pK %d\n", buf, len);
 		return;
 	}
 	hdr = buf;
@@ -537,7 +543,7 @@ void apr_cb_func(void *buf, int len, void *priv)
 		return;
 	}
 	pr_debug("svc_idx = %d\n", i);
-	pr_debug("%x %x %x %p %p\n", c_svc->id, c_svc->dest_id,
+	pr_debug("%x %x %x %pK %pK\n", c_svc->id, c_svc->dest_id,
 		 c_svc->client_id, c_svc->fn, c_svc->priv);
 	data.payload_size = hdr->pkt_size - hdr_size;
 	data.opcode = hdr->opcode;
@@ -601,7 +607,7 @@ static void apr_reset_deregister(struct work_struct *work)
 			container_of(work, struct apr_reset_work, work);
 
 	handle = apr_reset->handle;
-	pr_debug("%s:handle[%p]\n", __func__, handle);
+	pr_debug("%s:handle[%pK]\n", __func__, handle);
 	apr_deregister(handle);
 	kfree(apr_reset);
 }
@@ -634,7 +640,7 @@ int apr_deregister(void *handle)
 		client[dest_id][client_id].svc_cnt--;
 		if (!client[dest_id][client_id].svc_cnt) {
 			svc->need_reset = 0x0;
-			pr_debug("%s: service is reset %p\n", __func__, svc);
+			pr_debug("%s: service is reset %pK\n", __func__, svc);
 		}
 	}
 
@@ -662,7 +668,7 @@ void apr_reset(void *handle)
 
 	if (!handle)
 		return;
-	pr_debug("%s: handle[%p]\n", __func__, handle);
+	pr_debug("%s: handle[%pK]\n", __func__, handle);
 
 	if (apr_reset_workqueue == NULL) {
 		pr_err("%s: apr_reset_workqueue is NULL\n", __func__);
@@ -749,11 +755,11 @@ static int modem_notifier_cb(struct notifier_block *this, unsigned long code,
 	switch (code) {
 	case SUBSYS_BEFORE_SHUTDOWN:
 		pr_debug("M-Notify: Shutdown started\n");
-		apr_set_modem_state(APR_SUBSYS_DOWN);
-		dispatch_event(code, APR_DEST_MODEM);
 		break;
 	case SUBSYS_AFTER_SHUTDOWN:
 		pr_debug("M-Notify: Shutdown Completed\n");
+		apr_set_modem_state(APR_SUBSYS_DOWN);
+		dispatch_event(code, APR_DEST_MODEM);
 		break;
 	case SUBSYS_BEFORE_POWERUP:
 		pr_debug("M-notify: Bootup started\n");

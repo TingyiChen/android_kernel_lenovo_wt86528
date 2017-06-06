@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2015, 2017 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -389,6 +389,7 @@ int msm_create_session(unsigned int session_id, struct video_device *vdev)
 	msm_init_queue(&session->stream_q);
 	msm_enqueue(msm_session_q, &session->list);
 	mutex_init(&session->lock);
+	mutex_init(&session->lock_q);
 	return 0;
 }
 
@@ -546,6 +547,7 @@ int msm_destroy_session(unsigned int session_id)
 	msm_destroy_session_streams(session);
 	msm_remove_session_cmd_ack_q(session);
 	mutex_destroy(&session->lock);
+	mutex_destroy(&session->lock_q);
 	msm_delete_entry(msm_session_q, struct msm_session,
 		list, session);
 	buf_mgr_subdev = msm_buf_mngr_get_subdev();
@@ -881,10 +883,8 @@ static int msm_open(struct file *filep)
 	BUG_ON(!pvdev);
 
 	/* !!! only ONE open is allowed !!! */
-	if (atomic_read(&pvdev->opened))
+	if (atomic_cmpxchg(&pvdev->opened, 0, 1))
 		return -EBUSY;
-
-	atomic_set(&pvdev->opened, 1);
 
 	spin_lock_irqsave(&msm_pid_lock, flags);
 	msm_pid = get_pid(task_pid(current));
