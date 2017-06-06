@@ -440,6 +440,7 @@ static bool wcd_mbhc_is_hph_pa_on(struct snd_soc_codec *codec)
 static void wcd_mbhc_set_and_turnoff_hph_padac(struct wcd_mbhc *mbhc)
 {
 	u8 wg_time;
+	u8 state = 0;
 	struct snd_soc_codec *codec = mbhc->codec;
 
 	wg_time = snd_soc_read(codec, MSM8X16_WCD_A_ANALOG_RX_HPH_CNP_WG_TIME);
@@ -454,8 +455,12 @@ static void wcd_mbhc_set_and_turnoff_hph_padac(struct wcd_mbhc *mbhc)
 	} else {
 		pr_debug("%s PA is off\n", __func__);
 	}
-	snd_soc_update_bits(codec, MSM8X16_WCD_A_ANALOG_RX_HPH_CNP_EN,
+	state = gpio_get_value(EXT_SPK_AMP_GPIO);
+	pr_debug("%s external audio pa state:%d\n", __func__,state);
+	if(!state) {
+		snd_soc_update_bits(codec, MSM8X16_WCD_A_ANALOG_RX_HPH_CNP_EN,
 			    0x30, 0x00);
+	  }
 	usleep_range(wg_time * 1000, wg_time * 1000 + 50);
 }
 
@@ -693,6 +698,7 @@ static void wcd_mbhc_report_plug(struct wcd_mbhc *mbhc, int insertion,
 			 jack_type, mbhc->hph_status);
 		wcd_mbhc_jack_report(mbhc, &mbhc->headset_jack,
 				mbhc->hph_status, WCD_MBHC_JACK_MASK);
+		msm8x16_wcd_codec_set_headset_state(mbhc->hph_status);
 		wcd_mbhc_set_and_turnoff_hph_padac(mbhc);
 		hphrocp_off_report(mbhc, SND_JACK_OC_HPHR);
 		hphlocp_off_report(mbhc, SND_JACK_OC_HPHL);
@@ -762,6 +768,7 @@ static void wcd_mbhc_report_plug(struct wcd_mbhc *mbhc, int insertion,
 		wcd_mbhc_jack_report(mbhc, &mbhc->headset_jack,
 				    mbhc->hph_status, WCD_MBHC_JACK_MASK);
 		wcd_mbhc_clr_and_turnon_hph_padac(mbhc);
+		msm8x16_wcd_codec_set_headset_state(mbhc->hph_status);
 	}
 	pr_debug("%s: leave hph_status %x\n", __func__, mbhc->hph_status);
 }
@@ -1153,8 +1160,10 @@ static void wcd_mbhc_detect_plug_type(struct wcd_mbhc *mbhc)
 	bool micbias1;
 	bool cross_conn;
 	int try = 0;
+	int times = 0;
 
 	pr_debug("%s: enter\n", __func__);
+retry:
 	WCD_MBHC_RSC_ASSERT_LOCKED(mbhc);
 	micbias1 = (snd_soc_read(codec, MSM8X16_WCD_A_ANALOG_MICB_1_EN) & 0x80);
 	if (mbhc->mbhc_cb && mbhc->mbhc_cb->set_cap_mode)
@@ -1225,6 +1234,15 @@ static void wcd_mbhc_detect_plug_type(struct wcd_mbhc *mbhc)
 		}
 	}
 exit:
+	if(plug_type == MBHC_PLUG_TYPE_GND_MIC_SWAP && times == 0) {
+			times = 1;
+			snd_soc_update_bits(codec,MSM8X16_WCD_A_ANALOG_MBHC_FSM_CTL,
+					0x80, 0x0);
+			usleep(5*1000);
+			pr_err("plug_type is MBHC_PLUG_TYPE_GND_MIC_SWAP,retry again\n");
+			goto retry;
+	}
+	
 	pr_debug("%s: Valid plug found, plug type is %d\n",
 			 __func__, plug_type);
 	if (plug_type == MBHC_PLUG_TYPE_HEADSET ||
@@ -1395,10 +1413,10 @@ static int wcd_mbhc_get_button_mask(u16 btn)
 		mask = SND_JACK_BTN_2;
 		break;
 	case 7:
-		mask = SND_JACK_BTN_3;
+		mask = SND_JACK_BTN_2;
 		break;
 	case 15:
-		mask = SND_JACK_BTN_4;
+		mask = SND_JACK_BTN_2;
 		break;
 	default:
 		break;
@@ -2069,6 +2087,22 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 				       KEY_MEDIA);
 		if (ret) {
 			pr_err("%s: Failed to set code for btn-0\n",
+				__func__);
+			return ret;
+		}
+		ret = snd_jack_set_key(mbhc->button_jack.jack,
+				       SND_JACK_BTN_1,
+				       KEY_VOLUMEUP);
+		if (ret) {
+			pr_err("%s: Failed to set code for btn-1\n",
+				__func__);
+			return ret;
+		}
+		ret = snd_jack_set_key(mbhc->button_jack.jack,
+				       SND_JACK_BTN_2,
+				       KEY_VOLUMEDOWN);
+		if (ret) {
+			pr_err("%s: Failed to set code for btn-2\n",
 				__func__);
 			return ret;
 		}
