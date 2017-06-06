@@ -940,13 +940,13 @@ void mdss_dsi_cmd_bta_sw_trigger(struct mdss_panel_data *pdata)
 	pr_debug("%s: BTA done, status = %d\n", __func__, status);
 }
 
-static int mdss_dsi_read_status(struct mdss_dsi_ctrl_pdata *ctrl)
+static int mdss_dsi_read_status(struct mdss_dsi_ctrl_pdata *ctrl, int i)
 {
 	struct dcs_cmd_req cmdreq;
 
 	memset(&cmdreq, 0, sizeof(cmdreq));
-	cmdreq.cmds = ctrl->status_cmds.cmds;
-	cmdreq.cmds_cnt = ctrl->status_cmds.cmd_cnt;
+	cmdreq.cmds = ctrl->status_cmds[i].cmds;
+	cmdreq.cmds_cnt = ctrl->status_cmds[i].cmd_cnt;
 	cmdreq.flags = CMD_REQ_COMMIT | CMD_CLK_CTRL | CMD_REQ_RX;
 	cmdreq.rlen = ctrl->status_cmds_rlen;
 	cmdreq.cb = NULL;
@@ -969,6 +969,8 @@ static int mdss_dsi_read_status(struct mdss_dsi_ctrl_pdata *ctrl)
 int mdss_dsi_reg_status_check(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 {
 	int ret = 0;
+	int i,j;
+	u32 value;
 
 	if (ctrl_pdata == NULL) {
 		pr_err("%s: Invalid input data\n", __func__);
@@ -977,28 +979,50 @@ int mdss_dsi_reg_status_check(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 
 	pr_debug("%s: Checking Register status\n", __func__);
 
-	mdss_dsi_clk_ctrl(ctrl_pdata, DSI_ALL_CLKS, 1);
+	for(i=0;i<ctrl_pdata->status_cmds_num;i++)
+	{
+		value = 0;
+		mdss_dsi_clk_ctrl(ctrl_pdata, DSI_ALL_CLKS, 1);
 
-	if (ctrl_pdata->status_cmds.link_state == DSI_HS_MODE)
-		mdss_dsi_set_tx_power_mode(0, &ctrl_pdata->panel_data);
+		if (ctrl_pdata->status_cmds[i].link_state == DSI_HS_MODE)
+			mdss_dsi_set_tx_power_mode(0, &ctrl_pdata->panel_data);
 
-	ret = mdss_dsi_read_status(ctrl_pdata);
+		ret = mdss_dsi_read_status(ctrl_pdata, i);
 
-	if (ctrl_pdata->status_cmds.link_state == DSI_HS_MODE)
-		mdss_dsi_set_tx_power_mode(1, &ctrl_pdata->panel_data);
+		if (ctrl_pdata->status_cmds[i].link_state == DSI_HS_MODE)
+			mdss_dsi_set_tx_power_mode(1, &ctrl_pdata->panel_data);
 
-	/*
-	 * mdss_dsi_read_status returns the number of bytes returned
-	 * by the panel. Success value is greater than zero and failure
-	 * case returns zero.
-	 */
-	if (ret > 0) {
-		ret = ctrl_pdata->check_read_status(ctrl_pdata);
-	} else {
-		pr_err("%s: Read status register returned error\n", __func__);
+		/*
+		 * mdss_dsi_read_status returns the number of bytes returned
+		 * by the panel. Success value is greater than zero and failure
+	 	* case returns zero.
+	 	*/
+		if (ret > 0) {
+			for(j=0;j<ctrl_pdata->status_value[i][0];j++)
+			{
+				value = (value << 8) | ctrl_pdata->status_buf.data[j];
+			}
+			
+			pr_err("%s: Read back value from panel is: %x\n", __func__, value);
+			
+			if(value != ctrl_pdata->status_value[i][1])
+			{
+				pr_err("%s: Read back value from panel is incorrect\n",
+								__func__);
+				mdss_dsi_clk_ctrl(ctrl_pdata, DSI_ALL_CLKS, 0);			
+				return -EINVAL;
+			} else
+			{
+				mdss_dsi_clk_ctrl(ctrl_pdata, DSI_ALL_CLKS, 0);
+				ret = 1;
+			}
+		} else {
+			pr_err("%s: Read status register returned error\n", __func__);
+			mdss_dsi_clk_ctrl(ctrl_pdata, DSI_ALL_CLKS, 0);
+			return ret;
+		}
 	}
 
-	mdss_dsi_clk_ctrl(ctrl_pdata, DSI_ALL_CLKS, 0);
 	pr_debug("%s: Read register done with ret: %d\n", __func__, ret);
 
 	return ret;
@@ -1355,6 +1379,9 @@ static struct dsi_cmd_desc pkt_size_cmd = {
  * 3rd read: 14 bytes payload + 2 crc
  *
  */
+#ifdef CONFIG_MACH_WT86528
+extern int Packet_PLAG;
+#endif
 int mdss_dsi_cmds_rx(struct mdss_dsi_ctrl_pdata *ctrl,
 			struct dsi_cmd_desc *cmds, int rlen)
 {
@@ -1424,6 +1451,9 @@ do_send:
 	while (!end) {
 		pr_debug("%s:  rlen=%d pkt_size=%d rx_byte=%d\n",
 				__func__, rlen, pkt_size, rx_byte);
+#ifdef CONFIG_MACH_WT86528
+		if(Packet_PLAG == 0){
+#endif
 		max_pktsize[0] = pkt_size;
 		mdss_dsi_buf_init(tp);
 		ret = mdss_dsi_cmd_dma_add(tp, &pkt_size_cmd);
@@ -1447,8 +1477,14 @@ do_send:
 			rp->read_cnt = 0;
 			goto end;
 		}
+#ifdef CONFIG_MACH_WT86528
+		Packet_PLAG = 1;
+#endif
 		pr_debug("%s: max_pkt_size=%d sent\n",
 					__func__, pkt_size);
+#ifdef CONFIG_MACH_WT86528
+		}
+#endif
 
 		mdss_dsi_buf_init(tp);
 		ret = mdss_dsi_cmd_dma_add(tp, cmds);

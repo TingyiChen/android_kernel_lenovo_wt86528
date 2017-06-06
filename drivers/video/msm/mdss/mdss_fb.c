@@ -1074,12 +1074,28 @@ static void mdss_fb_scale_bl(struct msm_fb_data_type *mfd, u32 *bl_lvl)
 	(*bl_lvl) = temp;
 }
 
+#ifdef CONFIG_MACH_WT86528
+extern bool PwrKeyBoot,ChgrCFGchanged,IsChargingOn;
+extern bool LowChgCurrent;
+#endif
+
 /* must call this function from within mfd->bl_lock */
 void mdss_fb_set_backlight(struct msm_fb_data_type *mfd, u32 bkl_lvl)
 {
 	struct mdss_panel_data *pdata;
 	u32 temp = bkl_lvl;
 	bool bl_notify_needed = false;
+#ifdef CONFIG_MACH_WT86528
+	if(PwrKeyBoot == true && IsChargingOn == true && bkl_lvl) {
+		printk(KERN_WARNING  "~Set BL_ON CHGR Current to 850ma\n");
+		LowChgCurrent = true;
+		ChgrCFGchanged = true;
+	} else if(PwrKeyBoot == true && IsChargingOn == true && (!bkl_lvl)) {
+		printk(KERN_WARNING  "~Set BL_OFF CHGR Current to 1150ma\n");
+		LowChgCurrent = false;
+		ChgrCFGchanged = true;
+	}
+#endif
 
 	/* todo: temporary workaround to support doze mode */
 	if ((bkl_lvl == 0) && (mfd->doze_mode)) {
