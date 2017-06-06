@@ -931,6 +931,10 @@ static int msm_eeprom_platform_probe(struct platform_device *pdev)
 	struct msm_eeprom_board_info *eb_info = NULL;
 	struct device_node *of_node = pdev->dev.of_node;
 	struct msm_camera_power_ctrl_t *power_info = NULL;
+#ifdef CONFIG_MACH_WT86528
+	static char eeprom_module_id[20] = {0};
+	int index = 0;
+#endif
 
 	CDBG("%s E\n", __func__);
 
@@ -1052,6 +1056,51 @@ static int msm_eeprom_platform_probe(struct platform_device *pdev)
 			e_ctrl->cal_data.mapdata[j]);
 
 	e_ctrl->is_supported |= msm_eeprom_match_crc(&e_ctrl->cal_data);
+
+#ifdef CONFIG_MACH_WT86528
+	if (e_ctrl->subdev_id == 4) { //OV8865
+		CDBG("qhq %s,line=%d\n",__func__,__LINE__);
+		if ((e_ctrl->cal_data.mapdata[0] & 0xC0) == 0x40) {
+			index = 1;
+		} else if ((e_ctrl->cal_data.mapdata[0] & 0x30) == 0x10) {
+			index = 6;
+		} else if ((e_ctrl->cal_data.mapdata[0] & 0x0C) == 0x04) {
+			index = 11;
+		} else {
+			index = 0;
+		}
+		if (index && e_ctrl->cal_data.mapdata[index]) {
+			CDBG("qhq ov8865 %s,line=%d eeprom_module_id1=%d eeprom_module_id2=%d \n",__func__,__LINE__
+				,(index && e_ctrl->cal_data.mapdata[index]), e_ctrl->cal_data.mapdata[index]);
+			sprintf(eeprom_module_id, "%x", e_ctrl->cal_data.mapdata[index]);
+			CDBG("No OTP!\n");
+		}
+	} else if (e_ctrl->subdev_id == 5) { //OV5670
+		if ((e_ctrl->cal_data.mapdata[0]&0xC0) == 0x40) {
+			index = 1;
+		} else if ((e_ctrl->cal_data.mapdata[0]&0x30) == 0x10) {
+			index = 17;
+		} else if ((e_ctrl->cal_data.mapdata[0]&0x0C) == 0x04) {
+			index = 33;
+		} else {
+			index = 0;
+		}
+		if (index && e_ctrl->cal_data.mapdata[index]) {
+			CDBG("qhq ov5670 %s,line=%d eeprom_module_id1=%d eeprom_module_id2=%d \n",__func__,__LINE__
+				,(index && e_ctrl->cal_data.mapdata[index]), e_ctrl->cal_data.mapdata[index]);
+			sprintf(eeprom_module_id, "%x", e_ctrl->cal_data.mapdata[index]);
+		}
+	} else if (e_ctrl->subdev_id == 6) {  //OV13850, only group1
+			index = 1;
+		if (index && e_ctrl->cal_data.mapdata[index]) {
+			CDBG("qhq ov13850 %s,line=%d eeprom_module_id1=%d eeprom_module_id2=%d \n",__func__,__LINE__
+				,(index && e_ctrl->cal_data.mapdata[index]), e_ctrl->cal_data.mapdata[index]);
+			sprintf(eeprom_module_id, "%x", e_ctrl->cal_data.mapdata[index]);
+		}
+	}
+#endif
+	CDBG("qhq e_ctrl->subdev_id = %d, eeprom_module_id = %s, flag = %x, index = %d\n"
+		, e_ctrl->subdev_id, eeprom_module_id, e_ctrl->cal_data.mapdata[index], index);
 
 	rc = msm_camera_power_down(power_info, e_ctrl->eeprom_device_type,
 		&e_ctrl->i2c_client);

@@ -673,7 +673,10 @@ static int camera_v4l2_close(struct file *filep)
 		/* This should take care of both normal close
 		 * and application crashes */
 		msm_destroy_session(pvdev->vdev->num);
-
+#ifdef CONFIG_MACH_WT86528
+		/* Enable power collapse latency */                  
+		msm_pm_qos_update_request(CAMERA_ENABLE_PC_LATENCY); 
+#endif
 		pm_relax(&pvdev->vdev->dev);
 	} else {
 		camera_pack_event(filep, MSM_CAMERA_SET_PARM,

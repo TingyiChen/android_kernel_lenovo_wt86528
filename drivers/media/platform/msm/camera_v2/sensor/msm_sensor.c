@@ -410,6 +410,13 @@ static struct msm_cam_clk_info cam_8974_clk_info[] = {
 	[SENSOR_CAM_CLK] = {"cam_clk", 0},
 };
 
+#ifdef CONFIG_MACH_WT86528
+#ifdef CONFIG_DISPSENSOR_CAMERA_OPEN
+void (*msm_sensor_power_on)(int power_up) = NULL;
+EXPORT_SYMBOL_GPL(msm_sensor_power_on);
+#endif
+#endif /* CONFIG_MACH_WT86528 */
+
 int msm_sensor_power_down(struct msm_sensor_ctrl_t *s_ctrl)
 {
 	struct msm_camera_power_ctrl_t *power_info;
@@ -481,6 +488,16 @@ int msm_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl)
 			break;
 		}
 	}
+
+#ifdef CONFIG_MACH_WT86528
+#ifdef CONFIG_DISPSENSOR_CAMERA_OPEN
+	if(rc == 0) {
+		if(msm_sensor_power_on != NULL) {
+			msm_sensor_power_on(1);
+		}
+	}
+#endif
+#endif /* CONFIG_MACH_WT86528 */
 
 	return rc;
 }
