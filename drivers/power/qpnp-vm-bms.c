@@ -284,6 +284,16 @@ struct qpnp_bms_chip {
 
 static struct qpnp_bms_chip *the_chip;
 
+#ifdef CONFIG_MACH_WT86528
+extern int Percentfull_times;
+extern bool FakeBatteryReport;
+extern bool InSOCrecharge,BattFull,TrunOnChg;
+extern int fan_54015_batt_current,fan_54015_batt_ocv;
+extern int BattTemp;
+extern int fan54015_getcharge_stat(void);
+extern struct work_struct chg_fast_work;
+#endif
+
 static struct temp_curr_comp_map temp_curr_comp_lut[] = {
 			{-300, 15},
 			{250, 17},
@@ -1199,6 +1209,20 @@ static int get_battery_voltage(struct qpnp_bms_chip *chip, int *result_uv)
 
 static int get_battery_status(struct qpnp_bms_chip *chip)
 {
+#ifdef CONFIG_MACH_WT86528
+	int chg_status = 0;
+
+	chg_status = fan54015_getcharge_stat();
+
+	if(chg_status < 0) {
+		pr_err("Failed to read FAN54015 status! \n");
+		return POWER_SUPPLY_STATUS_UNKNOWN;
+	} else if(chg_status == 0x01) {
+		printk(KERN_WARNING  "~ status3 \n");
+		return POWER_SUPPLY_STATUS_CHARGING;
+	}
+	return POWER_SUPPLY_STATUS_DISCHARGING;
+#else
 	union power_supply_propval ret = {0,};
 
 	if (chip->batt_psy == NULL)
@@ -1213,6 +1237,7 @@ static int get_battery_status(struct qpnp_bms_chip *chip)
 	/* Default to false if the battery power supply is not registered. */
 	pr_debug("battery power supply is not registered\n");
 	return POWER_SUPPLY_STATUS_UNKNOWN;
+#endif
 }
 
 static int get_batt_therm(struct qpnp_bms_chip *chip, int *batt_temp)
@@ -1418,6 +1443,12 @@ static int report_eoc(struct qpnp_bms_chip *chip)
 			pr_err("Unable to get battery 'STATUS' rc=%d\n", rc);
 		} else if (ret.intval != POWER_SUPPLY_STATUS_FULL) {
 			pr_debug("Report EOC to charger\n");
+#ifdef CONFIG_MACH_WT86528
+	InSOCrecharge = false;
+	FakeBatteryReport = true;
+	BattFull = true;
+	printk(KERN_WARNING  "~ 1.BAT Full,TurnOff CHGR  \n");
+#endif
 			ret.intval = POWER_SUPPLY_STATUS_FULL;
 			rc = chip->batt_psy->set_property(chip->batt_psy,
 					POWER_SUPPLY_PROP_STATUS, &ret);
@@ -1427,6 +1458,31 @@ static int report_eoc(struct qpnp_bms_chip *chip)
 			}
 			chip->eoc_reported = true;
 		}
+#ifdef CONFIG_MACH_WT86528
+	else if(0 < BattTemp && BattTemp < 450) {
+		if(fan_54015_batt_current < 0
+			&& fan_54015_batt_current >- 150000
+				&& fan_54015_batt_ocv > 4340000) {
+			InSOCrecharge = false;
+			FakeBatteryReport=true;
+			BattFull = true;
+			printk(KERN_WARNING  "~ 2.BAT Full,TurnOff CHGR  \n");
+			TrunOnChg = false;
+			chip->eoc_reported = true;
+		}
+	} else if(450 < BattTemp && BattTemp <500) {
+		if(fan_54015_batt_current < 0
+			&& fan_54015_batt_current >- 200000
+				&& fan_54015_batt_ocv > 4320000) {
+			InSOCrecharge = false;
+			FakeBatteryReport=true;
+			BattFull = true;
+			printk(KERN_WARNING  "~ 3.BAT Full,TurnOff CHGR  \n");           
+			TrunOnChg = false;
+			chip->eoc_reported = true;
+		}
+	}
+#endif
 	} else {
 		pr_err("battery psy not registered\n");
 	}
@@ -1450,6 +1506,13 @@ static void check_recharge_condition(struct qpnp_bms_chip *chip)
 
 	/* Report recharge to charger for SOC based resume of charging */
 	if ((status != POWER_SUPPLY_STATUS_CHARGING) && chip->eoc_reported) {
+#ifdef CONFIG_MACH_WT86528
+		InSOCrecharge = true;
+		BattFull= false;
+		TrunOnChg = true;
+		printk(KERN_WARNING  "~check_recharge_condition chg_fast_work  \n");
+  		schedule_work(&chg_fast_work);
+#endif
 		ret.intval = POWER_SUPPLY_STATUS_CHARGING;
 		rc = chip->batt_psy->set_property(chip->batt_psy,
 				POWER_SUPPLY_PROP_STATUS, &ret);
@@ -1459,6 +1522,9 @@ static void check_recharge_condition(struct qpnp_bms_chip *chip)
 			pr_info("soc dropped below resume_soc soc=%d resume_soc=%d, restart charging\n",
 					chip->last_soc,
 					chip->dt.cfg_soc_resume_limit);
+#ifdef CONFIG_MACH_WT86528
+			if(get_battery_status(chip)==POWER_SUPPLY_STATUS_CHARGING)
+#endif 
 			chip->eoc_reported = false;
 		}
 	}
@@ -1600,7 +1666,20 @@ static int report_vm_bms_soc(struct qpnp_bms_chip *chip)
 	calculate_delta_time(&last_change_sec, &time_since_last_change_sec);
 
 	charging = is_battery_charging(chip);
-
+#ifdef CONFIG_MACH_WT86528
+	if (FakeBatteryReport) {
+		Percentfull_times = 20;
+	} else {
+		Percentfull_times--;
+		if(Percentfull_times < 10)
+			Percentfull_times = 10; 
+	}
+	rc = fan54015_getcharge_stat();
+	if(rc == 0x1)
+		charging = true;
+	else
+		charging = false;
+#endif
 	pr_debug("charging=%d last_soc=%d last_soc_unbound=%d\n",
 		charging, chip->last_soc, chip->last_soc_unbound);
 	/*
@@ -1699,6 +1778,29 @@ static int report_vm_bms_soc(struct qpnp_bms_chip *chip)
 	 * during bootup if soc is 100:
 	 */
 	soc = bound_soc(soc);
+#ifdef CONFIG_MACH_WT86528
+	if(soc == 100 && charging) {  
+		if(0 < BattTemp && BattTemp < 450) {
+			if(fan_54015_batt_current < 0
+				&& fan_54015_batt_current >- 150000
+					&& fan_54015_batt_ocv > 4340000)
+				soc = 100;
+			else if((fan_54015_batt_current <- 150000)
+				|| (fan_54015_batt_ocv < 4340000))
+				soc -= 1;
+		} else if(450 < BattTemp && BattTemp < 500) {
+			if(fan_54015_batt_current < 0
+				&& fan_54015_batt_current >- 200000
+					&& fan_54015_batt_ocv > 4320000)
+			soc = 100;
+			else if((fan_54015_batt_current <- 200000)
+				|| (fan_54015_batt_ocv < 4320000))
+				soc -= 1;
+		}		   
+	}
+	if (soc < 97)
+		FakeBatteryReport=false;
+#endif
 	if ((soc != chip->last_soc) || (soc == 100)) {
 		chip->last_soc = soc;
 		check_eoc_condition(chip);
@@ -2300,6 +2402,10 @@ static int qpnp_vm_bms_power_get_property(struct power_supply *psy,
 	return 0;
 }
 
+#ifdef CONFIG_MACH_WT86528
+extern int fan_54015_batt_current,fan_54015_batt_ocv;
+#endif
+
 static int qpnp_vm_bms_power_set_property(struct power_supply *psy,
 					enum power_supply_property psp,
 					const union power_supply_propval *val)
@@ -2311,11 +2417,17 @@ static int qpnp_vm_bms_power_set_property(struct power_supply *psy,
 	switch (psp) {
 	case POWER_SUPPLY_PROP_CURRENT_NOW:
 		chip->current_now = val->intval;
+#ifdef CONFIG_MACH_WT86528
+		fan_54015_batt_current= val->intval;
+#endif
 		pr_debug("IBATT = %d\n", val->intval);
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_OCV:
 		cancel_delayed_work_sync(&chip->monitor_soc_work);
 		chip->last_ocv_uv = val->intval;
+#ifdef CONFIG_MACH_WT86528
+		fan_54015_batt_ocv = val->intval;
+#endif
 		pr_debug("OCV = %d\n", val->intval);
 		schedule_delayed_work(&chip->monitor_soc_work, 0);
 		break;
@@ -2866,7 +2978,9 @@ static void adjust_pon_ocv(struct qpnp_bms_chip *chip, int batt_temp)
 static int calculate_initial_soc(struct qpnp_bms_chip *chip)
 {
 	int rc, batt_temp = 0, est_ocv = 0;
-
+#ifdef CONFIG_MACH_WT86528
+	u32 Vbat_ocv = 0;
+#endif
 	rc = get_batt_therm(chip, &batt_temp);
 	if (rc < 0) {
 		pr_err("Unable to read batt temp, using default=%d\n",
@@ -2902,11 +3016,36 @@ static int calculate_initial_soc(struct qpnp_bms_chip *chip)
 			chip->calculated_soc = lookup_soc_ocv(chip, est_ocv,
 								batt_temp);
 		} else {
+#ifdef CONFIG_MACH_WT86528
+			rc = qpnp_read_wrapper(chip, (u8 *)&Vbat_ocv,
+				chip->base + 0xB8, 2);
+			if (rc)
+				pr_err("~Read Vbat_ocv Failed! rc = %d\n", rc);
+			else
+				pr_info("\n~Vbat_ocv = %d\n", Vbat_ocv);
+			Vbat_ocv *= 1000;
+			if(!chip->shutdown_soc_invalid) {
+				if(chip->shutdown_ocv > Vbat_ocv)
+					Vbat_ocv = Vbat_ocv + (chip->shutdown_ocv-Vbat_ocv) / 2;
+				else
+					Vbat_ocv = chip->shutdown_ocv + (Vbat_ocv-chip->shutdown_ocv)/2;
+			}
+			pr_info("\n~Vbat_ocv_adjusted = %d\n", Vbat_ocv);
+			chip->last_ocv_uv = Vbat_ocv;
+			chip->calculated_soc = lookup_soc_ocv(chip,chip->last_ocv_uv, batt_temp);
+			if(!chip->shutdown_soc_invalid &&
+				(abs(chip->shutdown_soc - chip->calculated_soc) <
+					chip->dt.cfg_shutdown_soc_valid_limit))
+				{
+#endif
 			chip->last_ocv_uv = chip->shutdown_ocv;
 			chip->last_soc = chip->shutdown_soc;
 			chip->calculated_soc = lookup_soc_ocv(chip,
 						chip->shutdown_ocv, batt_temp);
 			pr_debug("Using shutdown SOC\n");
+#ifdef CONFIG_MACH_WT86528
+				}
+#endif
 		}
 	} else {
 		/*
@@ -2917,6 +3056,25 @@ static int calculate_initial_soc(struct qpnp_bms_chip *chip)
 		if (chip->workaround_flag & WRKARND_PON_OCV_COMP)
 			adjust_pon_ocv(chip, batt_temp);
 
+#ifdef CONFIG_MACH_WT86528
+		rc = qpnp_read_wrapper(chip, (u8 *)&Vbat_ocv,
+			chip->base + 0xB8, 2);
+		if (rc)
+			pr_err("~Read Vbat_ocv Failed! rc = %d\n", rc);
+		else
+			pr_info("\n~ Vbat_ocv = %d\n", Vbat_ocv);
+
+		Vbat_ocv *= 1000;
+		if(!chip->shutdown_soc_invalid) {
+			if(chip->shutdown_ocv > Vbat_ocv)
+				Vbat_ocv = Vbat_ocv + (chip->shutdown_ocv-Vbat_ocv) / 2;
+			else
+				Vbat_ocv = chip->shutdown_ocv + (Vbat_ocv-chip->shutdown_ocv) / 2;
+		}
+		pr_info("\n~Vbat_ocv_adjusted = %d\n", Vbat_ocv);
+
+		chip->last_ocv_uv = Vbat_ocv;
+#endif
 		 /* !warm_reset use PON OCV only if shutdown SOC is invalid */
 		chip->calculated_soc = lookup_soc_ocv(chip,
 					chip->last_ocv_uv, batt_temp);

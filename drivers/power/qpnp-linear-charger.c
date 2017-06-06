@@ -201,6 +201,9 @@ static enum power_supply_property msm_batt_power_props[] = {
 	POWER_SUPPLY_PROP_CHARGE_TYPE,
 	POWER_SUPPLY_PROP_HEALTH,
 	POWER_SUPPLY_PROP_PRESENT,
+#ifdef CONFIG_MACH_WT86528
+	POWER_SUPPLY_PROP_TECHNOLOGY,
+#endif
 	POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN,
 	POWER_SUPPLY_PROP_VOLTAGE_MIN_DESIGN,
 	POWER_SUPPLY_PROP_VOLTAGE_NOW,
@@ -667,6 +670,25 @@ static int qpnp_lbc_is_chg_gone(struct qpnp_lbc_chip *chip)
 	return (rt_sts & CHG_GONE_BIT) ? 1 : 0;
 }
 
+#ifdef CONFIG_MACH_WT86528
+#define PLUGIN_DELAY		msecs_to_jiffies(500)
+int Percentfull_times=10;
+extern void fan54015_USB_startcharging(void);
+extern void  fan54015_TA_startcharging(void);
+extern void  fan54015_stopcharging(void);
+extern int fan54015_getcharge_stat(void);
+extern  bool IsUsbPlugIn,IsTAPlugIn,TrunOnChg,IsChargingOn,ResetFan54015,ChgrCFGchanged,VbusValid,OTGturnOn,InSOCrecharge,BattFull,RemoveBTC, LowChgCurrent;
+extern bool FakeBatteryReport;
+extern  int Fan54015Voreg,fan_54015_batt_current,Fan54015Iochg,fan_54015_batt_ocv;
+extern uint   BattSOC,BattVol;
+extern int BattTemp;
+extern struct work_struct chg_fast_work;
+extern struct delayed_work chg_plugin_work;
+extern struct power_supply  * pFan_batt_psy;
+int IsBattPresent(void);
+struct qpnp_lbc_chip *pmic8916_chip;
+#endif
+
 static int qpnp_lbc_charger_enable(struct qpnp_lbc_chip *chip, int reason,
 					int enable)
 {
@@ -685,6 +707,16 @@ static int qpnp_lbc_charger_enable(struct qpnp_lbc_chip *chip, int reason,
 		goto skip;
 
 	reg_val = !!disabled ? CHG_FORCE_BATT_ON : CHG_ENABLE;
+#ifdef CONFIG_MACH_WT86528   
+	if (reg_val == CHG_FORCE_BATT_ON)
+		TrunOnChg = false;
+	else if(reg_val == CHG_ENABLE) {
+		TrunOnChg = true;
+		ChgrCFGchanged = true;
+		printk(KERN_WARNING  "~qpnp_lbc_charger_enable chg_fast_work  \n");
+		schedule_work(&chg_fast_work);
+	}
+#endif	   
 	rc = qpnp_lbc_masked_write(chip, chip->chgr_base + CHG_CTRL_REG,
 				CHG_EN_MASK, reg_val);
 	if (rc) {
@@ -696,6 +728,39 @@ skip:
 	chip->charger_disabled = disabled;
 	return rc;
 }
+
+#ifdef CONFIG_MACH_WT86528
+void SetLBCchgrCTRLreg(void)
+{
+	int rc = 0;
+
+	rc = qpnp_lbc_masked_write(pmic8916_chip, 0x1347,0x1, 0x1);
+	if (rc)
+		printk(KERN_WARNING  "~ write reg 0x1347 Failed!\n");
+
+	rc = qpnp_lbc_masked_write(pmic8916_chip, pmic8916_chip->chgr_base + CHG_CTRL_REG,0x80, 0x0);
+
+	if (rc)
+		printk(KERN_WARNING	"~Failed to write  reg 0x%x	\n",pmic8916_chip->chgr_base + CHG_CTRL_REG);
+}
+
+void GetLBCchgrCTRLreg(void)
+{
+	u8 reg_val;
+	int rc = 0;
+
+	rc = __qpnp_lbc_read(pmic8916_chip->spmi, pmic8916_chip->chgr_base + CHG_CTRL_REG, &reg_val, 1);
+	if (rc)
+		printk(KERN_WARNING	"~Failed to read  reg 0x%x	\n",pmic8916_chip->chgr_base + CHG_CTRL_REG);
+	else
+		printk(KERN_WARNING	"~CHG CTRL [0x%x]=0x%x   \n",pmic8916_chip->chgr_base + CHG_CTRL_REG,reg_val);
+	rc = __qpnp_lbc_read(pmic8916_chip->spmi, 0x1347, &reg_val, 1);
+	if (rc)
+		printk(KERN_WARNING	"~Failed to read  reg 0x%x	\n",0x1347);
+	else
+		printk(KERN_WARNING	"~CHG CTRL [0x%x]=0x%x   \n",0x1347,reg_val);
+}
+#endif
 
 static int qpnp_lbc_is_batt_present(struct qpnp_lbc_chip *chip)
 {
@@ -876,7 +941,12 @@ static int qpnp_lbc_vddmax_set(struct qpnp_lbc_chip *chip, int voltage)
 		pr_err("bad mV=%d asked to set\n", voltage);
 		return -EINVAL;
 	}
-
+#ifdef CONFIG_MACH_WT86528
+	if(Fan54015Voreg != voltage) {
+		Fan54015Voreg = voltage;
+		ChgrCFGchanged = true;
+	}
+#endif
 	spin_lock_irqsave(&chip->hw_access_lock, flags);
 	reg_val = (voltage - QPNP_LBC_VBAT_MIN_MV) / QPNP_LBC_VBAT_STEP_MV;
 	pr_debug("voltage=%d setting %02x\n", voltage, reg_val);
@@ -1029,16 +1099,29 @@ static int qpnp_lbc_ibatmax_set(struct qpnp_lbc_chip *chip, int chg_current)
 {
 	u8 reg_val;
 	int rc;
+#ifdef CONFIG_MACH_WT86528
+	int original_current;
+#endif
 
 	if (chg_current > QPNP_LBC_IBATMAX_MAX)
 		pr_debug("bad mA=%d clamping current\n", chg_current);
-
+#ifdef CONFIG_MACH_WT86528
+	if(Fan54015Iochg != chg_current) {
+		ChgrCFGchanged=true;
+		Fan54015Iochg = chg_current;
+		original_current = chg_current;
+		chg_current = 100;
+	}
+#endif
 	chg_current = clamp(chg_current, QPNP_LBC_IBATMAX_MIN,
 						QPNP_LBC_IBATMAX_MAX);
 	reg_val = (chg_current - QPNP_LBC_IBATMAX_MIN) / QPNP_LBC_I_STEP_MA;
 
 	rc = qpnp_lbc_write(chip, chip->chgr_base + CHG_IBAT_MAX_REG,
 				&reg_val, 1);
+#ifdef CONFIG_MACH_WT86528
+	chg_current = original_current;
+#endif
 	if (rc)
 		pr_err("Failed to set IBAT_MAX rc=%d\n", rc);
 	else
@@ -1214,7 +1297,9 @@ static int get_prop_battery_voltage_now(struct qpnp_lbc_chip *chip)
 		pr_err("Unable to read vbat rc=%d\n", rc);
 		return 0;
 	}
-
+#ifdef CONFIG_MACH_WT86528
+	BattVol = results.physical;
+#endif
 	return results.physical;
 }
 
@@ -1234,10 +1319,16 @@ static int get_prop_batt_present(struct qpnp_lbc_chip *chip)
 	return (reg_val & BATT_PRES_MASK) ? 1 : 0;
 }
 
+#ifdef CONFIG_MACH_WT86528
+static int get_prop_batt_temp(struct qpnp_lbc_chip *chip);
+#endif
 static int get_prop_batt_health(struct qpnp_lbc_chip *chip)
 {
 	u8 reg_val;
 	int rc;
+#ifdef CONFIG_MACH_WT86528
+	int batt_temp = 0;
+#endif
 
 	rc = qpnp_lbc_read(chip, chip->bat_if_base + BAT_IF_TEMP_STATUS_REG,
 				&reg_val, 1);
@@ -1245,7 +1336,17 @@ static int get_prop_batt_health(struct qpnp_lbc_chip *chip)
 		pr_err("Failed to read battery health rc=%d\n", rc);
 		return POWER_SUPPLY_HEALTH_UNKNOWN;
 	}
-
+#ifdef CONFIG_MACH_WT86528
+	batt_temp = get_prop_batt_temp(chip);
+	if (batt_temp > 500) {  
+		pr_info("\n~Batt_Heal_HOT\n");
+		return POWER_SUPPLY_HEALTH_OVERHEAT;
+	}
+	else if(batt_temp < 0) {
+		pr_info("\n~Batt_Heal_COLD\n");
+		return POWER_SUPPLY_HEALTH_COLD;
+	}
+#endif
 	if (BATT_TEMP_HOT_MASK & reg_val)
 		return POWER_SUPPLY_HEALTH_OVERHEAT;
 	if (!(BATT_TEMP_COLD_MASK & reg_val))
@@ -1260,12 +1361,29 @@ static int get_prop_batt_health(struct qpnp_lbc_chip *chip)
 
 static int get_prop_charge_type(struct qpnp_lbc_chip *chip)
 {
+#ifdef CONFIG_MACH_WT86528
+	int chg_status=0;
+#else
 	int rc;
 	u8 reg_val;
+#endif
 
 	if (!get_prop_batt_present(chip))
 		return POWER_SUPPLY_CHARGE_TYPE_NONE;
+#ifdef CONFIG_MACH_WT86528
+	if(!VbusValid)
+		return POWER_SUPPLY_CHARGE_TYPE_NONE;
 
+	chg_status = fan54015_getcharge_stat();
+
+	if(chg_status < 0) {
+		pr_err("Failed to read FAN54015 status! \n");
+		return POWER_SUPPLY_CHARGE_TYPE_NONE;
+	}
+	else if(chg_status == 0x01) {
+	return POWER_SUPPLY_CHARGE_TYPE_FAST;
+	}
+#else   
 	rc = qpnp_lbc_read(chip, chip->chgr_base + INT_RT_STS_REG,
 				&reg_val, 1);
 	if (rc) {
@@ -1275,18 +1393,44 @@ static int get_prop_charge_type(struct qpnp_lbc_chip *chip)
 
 	if (reg_val & FAST_CHG_ON_IRQ)
 		return POWER_SUPPLY_CHARGE_TYPE_FAST;
-
+#endif
 	return POWER_SUPPLY_CHARGE_TYPE_NONE;
 }
 
 static int get_prop_batt_status(struct qpnp_lbc_chip *chip)
 {
+#ifdef CONFIG_MACH_WT86528
+	int chg_status=0;
+#else
 	int rc;
 	u8 reg_val;
-
+#endif
 	if (qpnp_lbc_is_usb_chg_plugged_in(chip) && chip->chg_done)
 		return POWER_SUPPLY_STATUS_FULL;
 
+#ifdef CONFIG_MACH_WT86528
+	if(FakeBatteryReport)
+		return POWER_SUPPLY_STATUS_FULL;
+	chg_status = fan54015_getcharge_stat();
+	if(chg_status < 0) {
+		pr_err("Failed to read FAN54015 status! \n");
+		return POWER_SUPPLY_CHARGE_TYPE_NONE;
+	}
+	else if(chg_status == 0x01) {
+		printk(KERN_WARNING  "~status1 \n");
+		return POWER_SUPPLY_STATUS_CHARGING;
+	}
+	else if((chg_status == 0)&& VbusValid &&
+		(!OTGturnOn) && ((BattTemp >= 0)&&(BattTemp <= 500))) {
+		printk(KERN_WARNING  "~status1 \n");
+		return POWER_SUPPLY_STATUS_CHARGING;
+	}
+	else if(OTGturnOn || !VbusValid) {
+		printk(KERN_WARNING  "~status2 \n");
+		return POWER_SUPPLY_STATUS_DISCHARGING;
+	}
+    return POWER_SUPPLY_STATUS_DISCHARGING;
+#else		
 	rc = qpnp_lbc_read(chip, chip->chgr_base + INT_RT_STS_REG,
 				&reg_val, 1);
 	if (rc) {
@@ -1298,6 +1442,7 @@ static int get_prop_batt_status(struct qpnp_lbc_chip *chip)
 		return POWER_SUPPLY_STATUS_CHARGING;
 
 	return POWER_SUPPLY_STATUS_DISCHARGING;
+#endif
 }
 
 static int get_prop_current_now(struct qpnp_lbc_chip *chip)
@@ -1331,6 +1476,17 @@ static int get_prop_capacity(struct qpnp_lbc_chip *chip)
 		chip->bms_psy->get_property(chip->bms_psy,
 				POWER_SUPPLY_PROP_CAPACITY, &ret);
 		soc = ret.intval;
+#ifdef CONFIG_MACH_WT86528
+		if(FakeBatteryReport) {
+			printk(KERN_WARNING  "~FakeBatteryReport 100 \n");
+			soc = 100;
+		}
+		if(Percentfull_times > 10) {
+			printk(KERN_WARNING  "~after full fake 100 \n");
+			soc = 100;
+		}
+		BattSOC = soc;
+#endif
 		if (soc == 0) {
 			if (!qpnp_lbc_is_usb_chg_plugged_in(chip))
 				pr_warn_ratelimited("Batt 0, CHG absent\n");
@@ -1364,7 +1520,10 @@ static int get_prop_batt_temp(struct qpnp_lbc_chip *chip)
 	}
 	pr_debug("get_bat_temp %d, %lld\n", results.adc_code,
 							results.physical);
-
+#ifdef CONFIG_MACH_WT86528
+	BattTemp = (int)results.physical;
+	results.physical -= 0;
+#endif
 	return (int)results.physical;
 }
 
@@ -1656,8 +1815,18 @@ static int qpnp_batt_power_set_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
 		chip->cfg_charging_disabled = !(val->intval);
+#ifdef CONFIG_MACH_WT86528
+		if(val->intval) {
+			TrunOnChg = true;
+			printk(KERN_WARNING  "~POWER_SUPPLY_PROP_CHARGING_ENABLED chg_fast_work  \n");
+			schedule_work(&chg_fast_work);
+		}
+		else
+			TrunOnChg = false;
+#else
 		rc = qpnp_lbc_charger_enable(chip, USER,
 						!chip->cfg_charging_disabled);
+#endif
 		if (rc)
 			pr_err("Failed to disable charging rc=%d\n", rc);
 		break;
@@ -1674,7 +1843,24 @@ static int qpnp_batt_power_set_property(struct power_supply *psy,
 	power_supply_changed(&chip->batt_psy);
 	return rc;
 }
+#ifdef CONFIG_MACH_WT86528
+int IsBattPresent(void)
+{
+	union power_supply_propval ret = {0,};         
 
+	pFan_batt_psy = power_supply_get_by_name("battery");
+	if (pFan_batt_psy) {
+		/* if battery has been registered, use the type property */
+		pFan_batt_psy->get_property(pFan_batt_psy,
+					POWER_SUPPLY_PROP_PRESENT, &ret);
+		return ret.intval;
+	}
+
+	/* Default to false if the battery power supply is not registered. */
+	//printk(KERN_WARNING  "~battery power supply is not registered\n");
+	return false;
+}
+#endif
 static int qpnp_batt_power_get_property(struct power_supply *psy,
 				       enum power_supply_property psp,
 				       union power_supply_propval *val)
@@ -1695,6 +1881,11 @@ static int qpnp_batt_power_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_PRESENT:
 		val->intval = get_prop_batt_present(chip);
 		break;
+#ifdef CONFIG_MACH_WT86528
+	case POWER_SUPPLY_PROP_TECHNOLOGY:
+		val->intval = POWER_SUPPLY_TECHNOLOGY_LION;
+		break;
+#endif
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN:
 		val->intval = chip->cfg_max_voltage_mv * 1000;
 		break;
@@ -2468,6 +2659,14 @@ static irqreturn_t qpnp_lbc_usbin_valid_irq_handler(int irq, void *_chip)
 	if (chip->usb_present ^ usb_present) {
 		chip->usb_present = usb_present;
 		if (!usb_present) {
+#ifdef CONFIG_MACH_WT86528
+			printk(KERN_WARNING   "~Vbus Invalid.  \n");
+			IsUsbPlugIn = false;
+			IsTAPlugIn = false;
+			TrunOnChg = false;
+			ResetFan54015 = true;
+			VbusValid = false;
+#endif     
 			qpnp_lbc_charger_enable(chip, CURRENT, 0);
 			spin_lock_irqsave(&chip->ibat_change_lock, flags);
 			chip->usb_psy_ma = QPNP_CHG_I_MAX_MIN_90;
@@ -2502,6 +2701,18 @@ static irqreturn_t qpnp_lbc_usbin_valid_irq_handler(int irq, void *_chip)
 			 * charging gets enabled on USB insertion
 			 * irrespective of battery SOC above resume_soc.
 			 */
+#ifdef CONFIG_MACH_WT86528
+			if(!OTGturnOn) {
+				printk(KERN_WARNING   "~Vbus Valid.  \n");
+				TrunOnChg = true;
+				ResetFan54015 = true;
+				VbusValid = true;
+				IsUsbPlugIn = true;
+				InSOCrecharge = false;
+				BattFull = false;
+				schedule_delayed_work(&chg_plugin_work, PLUGIN_DELAY);
+			}
+#endif
 			qpnp_lbc_charger_enable(chip, SOC, 1);
 		}
 
@@ -3341,7 +3552,9 @@ static int qpnp_lbc_main_probe(struct spmi_device *spmi)
 			get_prop_batt_present(chip),
 			get_prop_battery_voltage_now(chip),
 			get_prop_capacity(chip));
-
+#ifdef CONFIG_MACH_WT86528
+	pmic8916_chip = chip;
+#endif
 	return 0;
 
 unregister_batt:
