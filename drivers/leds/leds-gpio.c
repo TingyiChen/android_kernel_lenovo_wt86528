@@ -23,6 +23,12 @@
 #include <linux/pinctrl/consumer.h>
 #include <linux/err.h>
 
+#ifdef CONFIG_MACH_WT86528
+#define LED_RED_FLAG 0x4
+#define LED_GREEN_FLAG 0x2
+#define LED_BLUE_FLAG 0x1
+#endif
+
 struct gpio_led_data {
 	struct led_classdev cdev;
 	unsigned gpio;
@@ -34,6 +40,11 @@ struct gpio_led_data {
 	int (*platform_gpio_blink_set)(unsigned gpio, int state,
 			unsigned long *delay_on, unsigned long *delay_off);
 };
+
+#ifdef CONFIG_MACH_WT86528
+static int led_flag = 0;/*led light flag: r:4, g:2, b:1*/
+extern int fan54015_getcharge_stat(void);
+#endif
 
 static void gpio_led_work(struct work_struct *work)
 {
@@ -56,6 +67,24 @@ static void gpio_led_set(struct led_classdev *led_cdev,
 		container_of(led_cdev, struct gpio_led_data, cdev);
 	int level;
 
+#ifdef CONFIG_MACH_WT86528
+	if(!strcmp(led_cdev->name, "red") && led_dat->blinking == 0) {
+		if(led_flag & LED_GREEN_FLAG) {
+			/*green is light, so return*/
+			return;
+		} else {
+			if(value == LED_OFF)
+				led_flag &= ~LED_RED_FLAG;
+			else
+				led_flag |= LED_RED_FLAG;
+		}
+	} else if(!strcmp(led_cdev->name, "green") && led_dat->blinking == 0) {
+		if(value == LED_OFF)
+			led_flag &= ~LED_GREEN_FLAG;
+		else
+			led_flag |= LED_GREEN_FLAG;
+	}
+#endif
 	if (value == LED_OFF)
 		level = 0;
 	else
@@ -97,6 +126,9 @@ static int create_gpio_led(const struct gpio_led *template,
 	int (*blink_set)(unsigned, int, unsigned long *, unsigned long *))
 {
 	int ret, state;
+#ifdef CONFIG_MACH_WT86528
+	int chg_status;
+#endif
 
 	led_dat->gpio = -1;
 
@@ -130,10 +162,20 @@ static int create_gpio_led(const struct gpio_led *template,
 	if (!template->retain_state_suspended)
 		led_dat->cdev.flags |= LED_CORE_SUSPENDRESUME;
 
+#ifdef CONFIG_MACH_WT86528
+	chg_status = fan54015_getcharge_stat();
+	if(!strcmp(template->name, "red")) {
+		if( (chg_status & 0x1) != 0x1) {
+			ret = gpio_direction_output(led_dat->gpio, led_dat->active_low ^ state);
+			if (ret < 0)
+				return ret;
+		}
+	}
+#else
 	ret = gpio_direction_output(led_dat->gpio, led_dat->active_low ^ state);
 	if (ret < 0)
 		return ret;
-
+#endif
 	INIT_WORK(&led_dat->work, gpio_led_work);
 
 	ret = led_classdev_register(parent, &led_dat->cdev);

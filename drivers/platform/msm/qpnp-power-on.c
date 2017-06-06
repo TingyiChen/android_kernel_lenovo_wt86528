@@ -1473,6 +1473,9 @@ static void qpnp_pon_debugfs_remove(struct spmi_device *spmi)
 {}
 #endif
 
+#ifdef CONFIG_MACH_WT86528
+bool PwrKeyBoot = false;
+#endif
 static int qpnp_pon_probe(struct spmi_device *spmi)
 {
 	struct qpnp_pon *pon;
@@ -1542,6 +1545,14 @@ static int qpnp_pon_probe(struct spmi_device *spmi)
 	boot_reason = ffs(pon_sts);
 
 	index = ffs(pon_sts) - 1;
+
+#ifdef CONFIG_MACH_WT86528
+	if (index != 4) {
+		printk(KERN_WARNING  "~PON:%s\n",qpnp_pon_reason[index]);
+		PwrKeyBoot = true;
+	}
+#endif
+	
 	cold_boot = !qpnp_pon_is_warm_reset();
 	if (index >= ARRAY_SIZE(qpnp_pon_reason) || index < 0) {
 		dev_info(&pon->spmi->dev,
