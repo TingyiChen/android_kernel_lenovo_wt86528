@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -306,7 +306,7 @@ static uint32_t msm_cpp_read(void __iomem *cpp_base)
 	uint32_t tmp, retry = 0;
 	do {
 		tmp = msm_camera_io_r(cpp_base + MSM_CPP_MICRO_FIFO_TX_STAT);
-	} while (((tmp & 0x2) == 0x0) && (retry++ < 10)) ;
+	} while (((tmp & 0x2) == 0x0) && (retry++ < 10));
 	if (retry < 10) {
 		tmp = msm_camera_io_r(cpp_base + MSM_CPP_MICRO_FIFO_TX_DATA);
 		CPP_DBG("Read data: 0%x\n", tmp);
@@ -1809,6 +1809,11 @@ static int msm_cpp_cfg(struct cpp_device *cpp_dev,
 			(void __user *)ioctl_ptr->ioctl_ptr,
 			sizeof(k_frame_info)))
 			return -EFAULT;
+
+	if (copy_from_user(&k_frame_info,
+		(void __user *)ioctl_ptr->ioctl_ptr,
+		sizeof(k_frame_info)))
+		return -EFAULT;
 
 	frame = msm_cpp_get_frame(ioctl_ptr);
 	if (!frame) {
