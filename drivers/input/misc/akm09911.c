@@ -1767,7 +1767,7 @@ static int akm_compass_parse_dt(struct device *dev,
 }
 #endif /* !CONFIG_OF */
 
-#ifndef WT_USE_FAN54015
+#ifndef CONFIG_MACH_WT86528
 static int akm_pinctrl_init(struct akm_compass_data *akm)
 {
 	struct i2c_client *client = akm->i2c;
